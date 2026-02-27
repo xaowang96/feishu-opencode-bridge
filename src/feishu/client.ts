@@ -985,6 +985,25 @@ class FeishuClient extends EventEmitter {
     }
   }
 
+  // 添加消息表情回复 (reaction)
+  async addReaction(messageId: string, emojiType: string): Promise<boolean> {
+    try {
+      const response = await (this.client.im as any).messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emojiType } },
+      });
+      if (response.code === 0) {
+        return true;
+      }
+      console.warn(`[飞书] 添加 reaction 失败: code=${response.code}, msg=${response.msg}`);
+      return false;
+    } catch (error) {
+      const formatted = formatError(error);
+      console.warn('[飞书] 添加 reaction 异常:', formatted.message);
+      return false;
+    }
+  }
+
   // 停止长连接
   stop(): void {
     if (this.wsClient) {

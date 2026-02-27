@@ -85,6 +85,15 @@ export const attachmentConfig = {
   maxSize: parseInt(process.env.ATTACHMENT_MAX_SIZE || String(50 * 1024 * 1024), 10),
 };
 
+// 完成通知配置
+export type CompletionNotifyMode = 'mention' | 'reaction' | 'both' | 'none';
+const rawNotify = (process.env.COMPLETION_NOTIFY || 'both').trim().toLowerCase();
+export const completionNotifyConfig = {
+  mode: (['mention', 'reaction', 'both', 'none'].includes(rawNotify) ? rawNotify : 'both') as CompletionNotifyMode,
+  get enableMention() { return this.mode === 'mention' || this.mode === 'both'; },
+  get enableReaction() { return this.mode === 'reaction' || this.mode === 'both'; },
+};
+
 // 验证配置
 export function validateConfig(): void {
   const errors: string[] = [];

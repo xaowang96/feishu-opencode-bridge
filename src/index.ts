@@ -10,7 +10,7 @@ import { groupHandler } from './handlers/group.js';
 import { lifecycleHandler } from './handlers/lifecycle.js';
 import { commandHandler } from './handlers/command.js';
 import { cardActionHandler } from './handlers/card-action.js';
-import { validateConfig } from './config.js';
+import { validateConfig, completionNotifyConfig } from './config.js';
 import {
   buildStreamCards,
   type StreamCardData,
@@ -46,6 +46,7 @@ async function main() {
   const retryNoticeMap = new Map<string, string>();
   const errorNoticeMap = new Map<string, string>();
   const streamCardMessageIdsMap = new Map<string, string[]>();
+  const completionNotifiedSet = new Set<string>(); // 防止完成通知重复发送
   const STREAM_CARD_COMPONENT_BUDGET = 180;
   const CORRELATION_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -990,11 +991,56 @@ async function main() {
     );
 
     if (buffer.status !== 'running') {
+      // 完成通知：@用户 + reaction
+      if (buffer.status === 'completed' && !completionNotifiedSet.has(buffer.key)) {
+        completionNotifiedSet.add(buffer.key);
+        const cardMsgId = nextMessageIds[nextMessageIds.length - 1];
+        const sessionData = chatSessionStore.getSession(buffer.chatId);
+        const userId = sessionData?.creatorId;
+
+        // D: @用户通知（取 AI 最后一条回复的末尾作为摘要）
+        if (completionNotifyConfig.enableMention && userId && cardMsgId) {
+          const maxLen = 200;
+          let summary = '';
+          try {
+            const messages = await opencodeClient.getSessionMessages(buffer.sessionId);
+            // 取最后一条 assistant 消息的 text parts
+            for (let i = messages.length - 1; i >= 0; i--) {
+              const msg = messages[i];
+              if ((msg.info as any)?.role === 'assistant') {
+                const textParts = msg.parts
+                  .filter((p: any) => p.type === 'text' && p.text)
+                  .map((p: any) => (p.text as string).trim())
+                  .filter(Boolean);
+                if (textParts.length > 0) {
+                  const lastPart = textParts[textParts.length - 1];
+                  // 取最后一段的最后几行
+                  const lines = lastPart.split('\n').filter((l: string) => l.trim());
+                  const tail = lines.slice(-3).join(' ').trim();
+                  summary = tail.length > maxLen ? tail.slice(0, maxLen) + '...' : tail;
+                }
+                break;
+              }
+            }
+          } catch (error) {
+            console.warn('[Notify] 获取 AI 回复摘要失败:', error);
+          }
+          const summaryBlock = summary ? ` ${summary}` : '';
+          void feishuClient.reply(cardMsgId, `<at user_id="${userId}"></at> ✅${summaryBlock}`).catch(() => {});
+        }
+
+        // A: 卡片 reaction
+        if (completionNotifyConfig.enableReaction && cardMsgId) {
+          void feishuClient.addReaction(cardMsgId, 'DONE').catch(() => {});
+        }
+      }
+
       streamContentMap.delete(buffer.key);
       streamToolStateMap.delete(buffer.key);
       streamTimelineMap.delete(buffer.key);
       streamCardMessageIdsMap.delete(buffer.key);
       clearPartSnapshotsForSession(buffer.sessionId);
+      completionNotifiedSet.delete(buffer.key);
       outputBuffer.clear(buffer.key);
     }
   });
