@@ -45,12 +45,15 @@ export const userConfig = {
   // 是否开启手动绑定已有 OpenCode 会话能力
   enableManualSessionBind: parseBooleanEnv(process.env.ENABLE_MANUAL_SESSION_BIND, true),
   
+
+  // 群聊中是否要求 @机器人 才响应普通消息（命令和待回答问题不受此限制）
+  requireMention: parseBooleanEnv(process.env.REQUIRE_MENTION, true),
+
   // 是否启用用户白名单（如果为空则不限制）
   get isWhitelistEnabled() {
     return this.allowedUsers.length > 0;
   },
 };
-
 // 模型配置
 const configuredDefaultProvider = process.env.DEFAULT_PROVIDER?.trim();
 const configuredDefaultModel = process.env.DEFAULT_MODEL?.trim();

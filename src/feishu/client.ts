@@ -276,6 +276,7 @@ class FeishuClient extends EventEmitter {
   private eventDispatcher: lark.EventDispatcher;
   private cardActionHandler?: (event: FeishuCardActionEvent) => Promise<FeishuCardActionResponse | void>;
   private cardUpdateQueue: Map<string, Promise<boolean>> = new Map();
+  private botOpenId: string = '';
 
   constructor() {
     super();
@@ -325,7 +326,31 @@ class FeishuClient extends EventEmitter {
     // 启动连接
     await this.wsClient.start({ eventDispatcher: this.eventDispatcher });
     console.log('[飞书] 长连接已建立');
+
+    // 获取机器人自身 open_id，用于群聊 @检测
+    try {
+      const resp = await this.client.request<{ bot?: { open_id?: string; bot_name?: string } }>({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info/',
+      });
+      const openId = (resp as any)?.bot?.open_id || (resp as any)?.data?.bot?.open_id || '';
+      if (openId) {
+        this.botOpenId = openId;
+        console.log(`[飞书] 机器人 open_id: ${this.botOpenId}`);
+      } else {
+        console.warn('[飞书] 未能获取机器人 open_id，@检测将使用 mentions 非空判断');
+      }
+    } catch (error) {
+      console.warn('[飞书] 获取机器人信息失败，@检测将使用 mentions 非空判断:', error);
+    }
+
   }
+
+  // 获取机器人的 open_id（用于精确匹配 @机器人）
+  getBotOpenId(): string {
+    return this.botOpenId;
+  }
+
 
   // 监听群成员退群事件
   onMemberLeft(callback: (chatId: string, memberId: string) => void): void {

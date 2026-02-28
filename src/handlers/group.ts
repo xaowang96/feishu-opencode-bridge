@@ -7,7 +7,7 @@ import { parseQuestionAnswerText } from '../opencode/question-parser.js';
 import { parseCommand } from '../commands/parser.js';
 import type { EffortLevel } from '../commands/effort.js';
 import { commandHandler } from './command.js';
-import { modelConfig, attachmentConfig } from '../config.js';
+import { modelConfig, attachmentConfig, userConfig } from '../config.js';
 
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -116,6 +116,18 @@ export class GroupHandler {
     return `请求失败: ${message}`;
   }
 
+  // 检测消息是否 @了机器人
+  private isBotMentioned(mentions?: FeishuMessageEvent['mentions']): boolean {
+    if (!mentions || mentions.length === 0) return false;
+    const botId = feishuClient.getBotOpenId();
+    if (!botId) {
+      // 未获取到 bot open_id 时，只要有任何 mention 就视为被 @（保守放行）
+      return true;
+    }
+    return mentions.some(m => m.id.open_id === botId);
+  }
+
+
   // 处理群聊消息
   async handleMessage(event: FeishuMessageEvent): Promise<void> {
     const { chatId, content, messageId, senderId, attachments } = event;
@@ -134,11 +146,21 @@ export class GroupHandler {
       return;
     }
 
-    // 2. 检查是否有待回答的问题
+    // 2. @机器人检测：开启 REQUIRE_MENTION 时，普通消息必须 @机器人 才响应
+    //    例外：当前有待回答问题时仍允许直接回复（保持问答流畅）
+    if (userConfig.requireMention && !this.isBotMentioned(event.mentions)) {
+      // 待回答问题例外：允许直接回复
+      const hasPendingQuestion = questionHandler.getByConversationKey(`chat:${chatId}`);
+      if (!hasPendingQuestion) {
+        return; // 静默忽略，不打扰正常聊天
+      }
+    }
+
+    // 3. 检查是否有待回答的问题
     const hasPending = await this.checkPendingQuestion(chatId, trimmed, messageId, attachments);
     if (hasPending) return;
 
-    // 3. 获取或创建会话
+    // 4. 获取或创建会话
     let sessionId = chatSessionStore.getSessionId(chatId);
     if (!sessionId) {
       // 获取群名作为 session title
@@ -165,7 +187,7 @@ export class GroupHandler {
       }
     }
 
-    // 4. 处理 Prompt
+    // 5. 处理 Prompt
     // 记录用户消息ID
     chatSessionStore.updateLastInteraction(chatId, messageId);
     
