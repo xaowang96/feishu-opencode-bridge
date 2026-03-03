@@ -131,17 +131,17 @@ export class GroupHandler {
     return mentions.some(m => m.id.open_id === botId);
   }
 
-  // 判断是否为小群（仅 1 个真人 + 机器人），小群无需 @机器人
+  // 判断是否为小群（仅 1 个真人），小群无需 @机器人
   private async isSmallGroup(chatId: string): Promise<boolean> {
     const now = Date.now();
     const cached = this.memberCountCache.get(chatId);
     if (cached && cached.expireAt > now) {
-      return cached.count <= 2;
+      return cached.count <= 1;
     }
     try {
       const members = await feishuClient.getChatMembers(chatId);
       this.memberCountCache.set(chatId, { count: members.length, expireAt: now + GroupHandler.MEMBER_COUNT_TTL_MS });
-      return members.length <= 2;
+      return members.length <= 1;
     } catch {
       // API 失败时保守处理：不跳过 @要求
       return false;
