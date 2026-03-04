@@ -472,6 +472,7 @@ export interface CreateChatCardData {
   sessionOptions: CreateChatSessionOption[];
   totalSessionCount?: number;
   manualBindEnabled: boolean;
+  chatNameInput?: string;  // 用户输入的群名称（用于回显）
 }
 
 function resolveCreateChatCardState(data: CreateChatCardData): {
@@ -513,48 +514,61 @@ function buildCreateChatSelectorElements(data: CreateChatCardData): object[] {
     noteLines.push(`已展示最近 ${state.shownExistingCount} 个会话（总计 ${state.totalSessionCount} 个）。`);
   }
 
-  return [
-    {
-      tag: 'action',
-      actions: [
-        {
-          tag: 'select_static',
-          placeholder: { tag: 'plain_text', content: '选择会话来源' },
-          value: { action: 'create_chat_select' },
-          options: state.options.map(option => ({
-            text: { tag: 'plain_text', content: option.label },
-            value: option.value,
-          })),
-        },
-      ],
+  // 所有交互元素放入同一个 form 容器，确保 input 值能通过 form_value 传递
+  // 顺序：群名 → 会话来源 → 提交按钮
+  const formElements: object[] = [];
+
+  // 1. 群名称输入框
+  formElements.push({
+    tag: 'input',
+    name: 'chat_name',
+    placeholder: { tag: 'plain_text', content: '群名称（可选，留空自动生成）' },
+    ...(data.chatNameInput ? { default_value: data.chatNameInput } : {}),
+  });
+
+  // 2. 会话来源选择器（select_static 在 form 内直接使用，不包 action 容器）
+  formElements.push({
+    tag: 'select_static',
+    name: 'session_source',
+    placeholder: { tag: 'plain_text', content: '选择会话来源' },
+    value: { action: 'create_chat_select' },
+    options: state.options.map(option => ({
+      text: { tag: 'plain_text', content: option.label },
+      value: option.value,
+    })),
+  });
+
+  // 3. 提交按钮
+  formElements.push({
+    tag: 'button',
+    text: { tag: 'plain_text', content: '➕ 创建群聊' },
+    type: 'primary',
+    action_type: 'form_submit',
+    name: 'create_chat_submit',
+    value: {
+      action: 'create_chat_submit',
+      selectedSessionId: state.selected.value,
     },
-    {
-      tag: 'action',
-      actions: [
-        {
-          tag: 'button',
-          text: {
-            tag: 'plain_text',
-            content: '➕ 创建群聊',
-          },
-          type: 'primary',
-          value: {
-            action: 'create_chat_submit',
-            selectedSessionId: state.selected.value,
-          },
-        },
-      ],
-    },
-    {
-      tag: 'note',
-      elements: [
-        {
-          tag: 'plain_text',
-          content: noteLines.join('\n'),
-        },
-      ],
-    },
-  ];
+  });
+
+  const elements: object[] = [];
+  elements.push({
+    tag: 'form',
+    name: 'create_chat_form',
+    elements: formElements,
+  });
+
+  elements.push({
+    tag: 'note',
+    elements: [
+      {
+        tag: 'plain_text',
+        content: noteLines.join('\n'),
+      },
+    ],
+  });
+
+  return elements;
 }
 
 export function buildCreateChatCard(data: CreateChatCardData): object {
