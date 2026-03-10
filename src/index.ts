@@ -824,11 +824,13 @@ async function main() {
       return true;
     }
 
+    const directory = chatSessionStore.getSession(event.chatId)?.sessionDirectory;
     const responded = await opencodeClient.respondToPermission(
       pending.sessionId,
       pending.permissionId,
       decision.allow,
-      decision.remember
+      decision.remember,
+      directory
     );
 
     if (!responded) {
@@ -1127,11 +1129,14 @@ async function main() {
           rememberRaw === 'true' ||
           rememberRaw === 'always' ||
           rememberRaw === '始终允许';
+        const cardChatId = event.chatId;
+        const directory = cardChatId ? chatSessionStore.getSession(cardChatId)?.sessionDirectory : undefined;
         const responded = await opencodeClient.respondToPermission(
           sessionId,
           permissionId,
           allow,
-          remember
+          remember,
+          directory
         );
 
         if (!responded) {
@@ -1277,7 +1282,8 @@ async function main() {
       // 1. Check Whitelist
       if (permissionHandler.isToolWhitelisted(event.tool)) {
           console.log(`[权限] 工具 ${event.tool} 在白名单中，自动允许`);
-          await opencodeClient.respondToPermission(event.sessionId, event.permissionId, true);
+          const whitelistDirectory = chatId ? chatSessionStore.getSession(chatId)?.sessionDirectory : undefined;
+          await opencodeClient.respondToPermission(event.sessionId, event.permissionId, true, undefined, whitelistDirectory);
           return;
       }
 

@@ -155,7 +155,15 @@ export class GroupHandler {
     const { chatId, content, messageId, senderId, attachments } = event;
     const trimmed = content.trim();
 
-    // 1. 优先处理命令
+    // 1. 有待回答的问题时，优先处理问题回答
+    //    防止 y/n/yes/no 等回答被 parseCommand 误识别为权限响应命令
+    const hasPendingQuestion = questionHandler.getByConversationKey(`chat:${chatId}`);
+    if (hasPendingQuestion) {
+      const hasPending = await this.checkPendingQuestion(chatId, trimmed, messageId, attachments);
+      if (hasPending) return;
+    }
+
+    // 2. 处理命令
     const command = parseCommand(trimmed);
     if (command.type !== 'prompt') {
       console.log(`[Group] 收到命令: ${command.type}`);
@@ -168,22 +176,15 @@ export class GroupHandler {
       return;
     }
 
-    // 2. @机器人检测：开启 REQUIRE_MENTION 时，普通消息必须 @机器人 才响应
-    //    例外：小群（≤2人）、待回答问题不要求 @
+    // 3. @机器人检测：开启 REQUIRE_MENTION 时，普通消息必须 @机器人 才响应
+    //    例外：小群（≤2人）
     if (userConfig.requireMention && !this.isBotMentioned(event.mentions)) {
-      const hasPendingQuestion = questionHandler.getByConversationKey(`chat:${chatId}`);
-      if (!hasPendingQuestion) {
-        // 小群无需 @：只有 1 个真人 + 机器人时，直接响应
-        const smallGroup = await this.isSmallGroup(chatId);
-        if (!smallGroup) {
-          return; // 多人群静默忽略，不打扰正常聊天
-        }
+      // 小群无需 @：只有 1 个真人 + 机器人时，直接响应
+      const smallGroup = await this.isSmallGroup(chatId);
+      if (!smallGroup) {
+        return; // 多人群静默忽略，不打扰正常聊天
       }
     }
-
-    // 3. 检查是否有待回答的问题
-    const hasPending = await this.checkPendingQuestion(chatId, trimmed, messageId, attachments);
-    if (hasPending) return;
 
     // 4. 获取或创建会话
     let sessionId = chatSessionStore.getSessionId(chatId);
@@ -327,7 +328,6 @@ export class GroupHandler {
         }
       }
 
-      console.log(`[Group] 提交问题回答: requestId=${pending.request.id.slice(0, 8)}...`);
 
       this.ensureStreamingBuffer(
         chatId,
@@ -335,12 +335,14 @@ export class GroupHandler {
         replyMessageId || null
       );
 
-      const success = await opencodeClient.replyQuestion(pending.request.id, answers);
+      const directory = chatSessionStore.getSession(chatId)?.sessionDirectory;
+      const success = await opencodeClient.replyQuestion(pending.request.id, answers, directory);
       
       if (success) {
           questionHandler.remove(pending.request.id);
           outputBuffer.touch(`chat:${chatId}`);
       } else {
+          console.error('[Group] replyQuestion 失败');
           await feishuClient.reply(replyMessageId, '⚠️ 回答提交失败，请重试');
       }
   }
@@ -370,7 +372,8 @@ export class GroupHandler {
         null
       );
 
-      const success = await opencodeClient.replyQuestion(pending.request.id, answers);
+      const directory = chatSessionStore.getSession(chatId)?.sessionDirectory;
+      const success = await opencodeClient.replyQuestion(pending.request.id, answers, directory);
 
       if (success) {
           questionHandler.remove(pending.request.id);

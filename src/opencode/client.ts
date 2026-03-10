@@ -902,12 +902,16 @@ class OpencodeClientWrapper extends EventEmitter {
     sessionId: string,
     permissionId: string,
     allow: boolean,
-    remember?: boolean
+    remember?: boolean,
+    directory?: string
   ): Promise<boolean> {
     try {
+      const normalizedDirectory = this.normalizeDirectory(directory);
+      if (normalizedDirectory) this.ensureDirectoryEventStream(normalizedDirectory);
       const responseType = allow ? (remember ? 'always' : 'once') : 'reject';
+      const url = this.buildUrlWithDirectory(`/session/${sessionId}/permissions/${permissionId}`, directory);
       const response = await fetch(
-        `${opencodeConfig.baseUrl}/session/${sessionId}/permissions/${permissionId}`,
+        url,
         {
           method: 'POST',
           headers: withOpencodeAuthorizationHeaders({ 'Content-Type': 'application/json' }),
@@ -1181,11 +1185,15 @@ class OpencodeClientWrapper extends EventEmitter {
   // 每个答案是选项的 label
   async replyQuestion(
     requestId: string,
-    answers: string[][]
+    answers: string[][],
+    directory?: string
   ): Promise<boolean> {
     try {
+      const normalizedDirectory = this.normalizeDirectory(directory);
+      if (normalizedDirectory) this.ensureDirectoryEventStream(normalizedDirectory);
+      const url = this.buildUrlWithDirectory(`/question/${requestId}/reply`, directory);
       const response = await fetch(
-        `${opencodeConfig.baseUrl}/question/${requestId}/reply`,
+        url,
         {
           method: 'POST',
           headers: withOpencodeAuthorizationHeaders({ 'Content-Type': 'application/json' }),
@@ -1209,10 +1217,13 @@ class OpencodeClientWrapper extends EventEmitter {
   }
 
   // 拒绝/跳过问题
-  async rejectQuestion(requestId: string): Promise<boolean> {
+  async rejectQuestion(requestId: string, directory?: string): Promise<boolean> {
     try {
+      const normalizedDirectory = this.normalizeDirectory(directory);
+      if (normalizedDirectory) this.ensureDirectoryEventStream(normalizedDirectory);
+      const url = this.buildUrlWithDirectory(`/question/${requestId}/reject`, directory);
       const response = await fetch(
-        `${opencodeConfig.baseUrl}/question/${requestId}/reject`,
+        url,
         {
           method: 'POST',
           headers: withOpencodeAuthorizationHeaders({ 'Content-Type': 'application/json' }),
