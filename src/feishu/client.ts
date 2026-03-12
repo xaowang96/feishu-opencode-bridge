@@ -1,7 +1,8 @@
 import * as lark from '@larksuiteoapi/node-sdk';
-import { feishuConfig } from '../config.js';
+import { feishuConfig, feishuRetryConfig } from '../config.js';
 import { EventEmitter } from 'events';
 import type { ReadStream } from 'fs';
+import { withRetry, isRetryableError } from '../utils/retry.js';
 
 function formatError(error: unknown): { message: string; responseData?: unknown } {
   if (error instanceof Error) {
@@ -293,6 +294,36 @@ class FeishuClient extends EventEmitter {
       verificationToken: feishuConfig.verificationToken,
     });
   }
+
+  /**
+   * 带重试的 API 调用包装器
+   * 仅对可重试的网络错误进行重试
+   */
+  private async callWithRetry<T>(
+    operation: () => Promise<T>,
+    operationName: string
+  ): Promise<T> {
+    if (!feishuRetryConfig.enabled) {
+      return operation();
+    }
+
+    const { result } = await withRetry(operation, {
+      maxRetries: feishuRetryConfig.maxRetries,
+      baseDelayMs: feishuRetryConfig.baseDelayMs,
+      maxDelayMs: feishuRetryConfig.maxDelayMs,
+      shouldRetry: isRetryableError,
+      onRetry: (attempt, error, delayMs) => {
+        console.warn(
+          `[飞书] ${operationName} 失败，第 ${attempt} 次重试（${Math.round(delayMs / 1000)}秒后）:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      },
+    });
+
+    return result;
+  }
+
+  // 启动长连接
 
   // 启动长连接
   async start(): Promise<void> {
@@ -592,14 +623,17 @@ class FeishuClient extends EventEmitter {
   // 发送文本消息
   async sendText(chatId: string, text: string): Promise<string | null> {
     try {
-      const response = await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      });
+      const response = await this.callWithRetry(
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }),
+        'sendText'
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -625,13 +659,16 @@ class FeishuClient extends EventEmitter {
   // 回复消息
   async reply(messageId: string, text: string): Promise<string | null> {
     try {
-      const response = await this.client.im.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      });
+      const response = await this.callWithRetry(
+        () => this.client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }),
+        'reply'
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -651,13 +688,16 @@ class FeishuClient extends EventEmitter {
   // 回复卡片
   async replyCard(messageId: string, card: object): Promise<string | null> {
     try {
-      const response = await this.client.im.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-        },
-      });
+      const response = await this.callWithRetry(
+        () => this.client.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+        }),
+        'replyCard'
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -698,10 +738,13 @@ class FeishuClient extends EventEmitter {
         msg_type: 'interactive',
         content: JSON.stringify(card),
       } as unknown as { content: string };
-      await this.client.im.message.patch({
-        path: { message_id: messageId },
-        data,
-      });
+      await this.callWithRetry(
+        () => this.client.im.message.patch({
+          path: { message_id: messageId },
+          data,
+        }),
+        'updateCard'
+      );
       console.log(`[飞书] 更新卡片成功: msgId=${messageId.slice(0, 16)}...`);
       return true;
     } catch (error) {
@@ -725,10 +768,13 @@ class FeishuClient extends EventEmitter {
             msg_type: 'interactive',
             content: JSON.stringify(buildFallbackInteractiveCard(card)),
           } as unknown as { content: string };
-          await this.client.im.message.patch({
-            path: { message_id: messageId },
-            data: fallbackData,
-          });
+          await this.callWithRetry(
+            () => this.client.im.message.patch({
+              path: { message_id: messageId },
+              data: fallbackData,
+            }),
+            'updateCard(fallback)'
+          );
           console.log(`[飞书] 精简卡片更新成功: msgId=${messageId.slice(0, 16)}...`);
           return true;
         } catch (fallbackError) {
@@ -743,12 +789,15 @@ class FeishuClient extends EventEmitter {
   // 更新消息（用于定时刷新输出）
   async updateMessage(messageId: string, text: string): Promise<boolean> {
     try {
-      await this.client.im.message.patch({
-        path: { message_id: messageId },
-        data: {
-          content: JSON.stringify({ text }),
-        },
-      });
+      await this.callWithRetry(
+        () => this.client.im.message.patch({
+          path: { message_id: messageId },
+          data: {
+            content: JSON.stringify({ text }),
+          },
+        }),
+        'updateMessage'
+      );
       return true;
     } catch (error) {
       const formatted = formatError(error);
@@ -760,14 +809,17 @@ class FeishuClient extends EventEmitter {
   // 发送消息卡片
   async sendCard(chatId: string, card: object): Promise<string | null> {
     try {
-      const response = await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-        },
-      });
+      const response = await this.callWithRetry(
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+        }),
+        'sendCard'
+      );
 
       const msgId = response.data?.message_id || null;
       if (msgId) {
@@ -789,14 +841,17 @@ class FeishuClient extends EventEmitter {
       if (isUniversalCardBuildFailure(formatted.responseData)) {
         console.warn(`[飞书] 发送卡片触发 230099/200800，尝试发送精简卡片: chatId=${chatId}`);
         try {
-          const fallbackResponse = await this.client.im.message.create({
-            params: { receive_id_type: 'chat_id' },
-            data: {
-              receive_id: chatId,
-              msg_type: 'interactive',
-              content: JSON.stringify(buildFallbackInteractiveCard(card)),
-            },
-          });
+          const fallbackResponse = await this.callWithRetry(
+            () => this.client.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: {
+                receive_id: chatId,
+                msg_type: 'interactive',
+                content: JSON.stringify(buildFallbackInteractiveCard(card)),
+              },
+            }),
+            'sendCard(fallback)'
+          );
 
           const fallbackMsgId = fallbackResponse.data?.message_id || null;
           if (fallbackMsgId) {

@@ -97,6 +97,18 @@ export const completionNotifyConfig = {
   get enableReaction() { return this.mode === 'reaction' || this.mode === 'both'; },
 };
 
+// 飞书 API 重试配置
+export const feishuRetryConfig = {
+  // 最大重试次数
+  maxRetries: parseNonNegativeIntEnv(process.env.FEISHU_MAX_RETRIES, 3),
+  // 初始退避时间（毫秒）
+  baseDelayMs: parseNonNegativeIntEnv(process.env.FEISHU_RETRY_BASE_DELAY_MS, 1000),
+  // 最大退避时间（毫秒）
+  maxDelayMs: parseNonNegativeIntEnv(process.env.FEISHU_RETRY_MAX_DELAY_MS, 10000),
+  // 是否启用重试
+  enabled: parseBooleanEnv(process.env.FEISHU_RETRY_ENABLED, true),
+};
+
 // 验证配置
 export function validateConfig(): void {
   const errors: string[] = [];
