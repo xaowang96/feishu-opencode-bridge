@@ -468,6 +468,7 @@ class FeishuClient extends EventEmitter {
 
       // 处理 @提及：移除 @机器人，其他 @ 替换为 @名字
       if (message.mentions) {
+        console.log(`[飞书][DIAG] mentions 原始数据: ${JSON.stringify(message.mentions)}`);
         for (const mention of message.mentions) {
           if (mention.id?.open_id === this.botOpenId) {
             content = content.replace(mention.key, '').trim();
