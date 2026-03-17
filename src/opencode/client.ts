@@ -897,6 +897,17 @@ class OpencodeClientWrapper extends EventEmitter {
     }
   }
 
+  async getSessionChildren(sessionId: string): Promise<Array<{ id: string }>> {
+    const client = this.getClient();
+    try {
+      const result = await client.session.children({ path: { id: sessionId } });
+      return (result.data as Array<{ id: string }>) || [];
+    } catch (error) {
+      console.error('[OpenCode] 获取子会话失败:', error);
+      return [];
+    }
+  }
+
   // 响应权限请求
   async respondToPermission(
     sessionId: string,

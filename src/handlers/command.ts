@@ -768,15 +768,27 @@ export class CommandHandler {
           }
           break;
 
-        case 'stop':
+        case 'stop': {
           const sessionId = chatSessionStore.getSessionId(chatId);
           if (sessionId) {
-            await opencodeClient.abortSession(sessionId, chatSessionStore.getSession(chatId)?.sessionDirectory);
+            const directory = chatSessionStore.getSession(chatId)?.sessionDirectory;
+            console.log(`[Stop] 中断会话: sessionId=${sessionId}, directory=${directory}`);
+            const aborted = await opencodeClient.abortSession(sessionId, directory);
+            console.log(`[Stop] abort 结果: ${aborted}`);
+
+            const children = await opencodeClient.getSessionChildren(sessionId).catch(() => []);
+            console.log(`[Stop] 子会话数量: ${children.length}`);
+            for (const child of children) {
+              console.log(`[Stop] 尝试中断子会话: ${child.id}`);
+              await opencodeClient.abortSession(child.id, directory).catch(() => {});
+            }
+
             await feishuClient.reply(messageId, '⏹️ 已发送中断请求');
           } else {
             await feishuClient.reply(messageId, '当前没有活跃的会话');
           }
           break;
+        }
 
         case 'owner':
           await this.handleOwnerCommand(chatId, messageId, context.senderId, command.ownerAction);
