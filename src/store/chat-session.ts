@@ -21,6 +21,7 @@ interface ChatSessionData {
   sessionId: string;
   sessionDirectory?: string;
   creatorId: string; // 创建者ID
+  lastSenderId?: string; // 最后发消息的用户ID（用于完成通知 @正确的人）
   createdAt: number;
   title?: string;
   chatType?: ChatSessionType;
@@ -267,7 +268,14 @@ class ChatSessionStore {
     return session.title.startsWith('飞书群聊') || session.title.startsWith('群聊');
   }
 
-  // 更新会话配置 (模型/角色/强度)
+  updateLastSender(chatId: string, senderId: string): void {
+    const session = this.data.get(chatId);
+    if (session && senderId) {
+      session.lastSenderId = senderId;
+      this.save();
+    }
+  }
+
   updateConfig(chatId: string, config: {
     preferredModel?: string;
     preferredAgent?: string;

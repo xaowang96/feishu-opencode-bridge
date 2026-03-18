@@ -222,6 +222,7 @@ export class GroupHandler {
     // 5. 处理 Prompt
     // 记录用户消息ID
     chatSessionStore.updateLastInteraction(chatId, messageId);
+    chatSessionStore.updateLastSender(chatId, senderId);
     
     // 获取当前会话配置
     const sessionConfig = chatSessionStore.getSession(chatId);

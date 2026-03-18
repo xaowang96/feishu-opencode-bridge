@@ -1019,7 +1019,7 @@ async function main() {
         completionNotifiedSet.add(buffer.key);
         const cardMsgId = nextMessageIds[nextMessageIds.length - 1];
         const sessionData = chatSessionStore.getSession(buffer.chatId);
-        const userId = sessionData?.creatorId;
+        const userId = sessionData?.lastSenderId || sessionData?.creatorId;
         const notifyCfg = chatSessionStore.getNotifyConfig(buffer.chatId);
         const enableMention = notifyCfg.completionNotifyMode === 'mention' || notifyCfg.completionNotifyMode === 'both';
         const enableReaction = notifyCfg.completionNotifyMode === 'reaction' || notifyCfg.completionNotifyMode === 'both';
