@@ -1020,9 +1020,11 @@ async function main() {
         const cardMsgId = nextMessageIds[nextMessageIds.length - 1];
         const sessionData = chatSessionStore.getSession(buffer.chatId);
         const userId = sessionData?.creatorId;
+        const notifyCfg = chatSessionStore.getNotifyConfig(buffer.chatId);
+        const enableMention = notifyCfg.completionNotifyMode === 'mention' || notifyCfg.completionNotifyMode === 'both';
+        const enableReaction = notifyCfg.completionNotifyMode === 'reaction' || notifyCfg.completionNotifyMode === 'both';
 
-        // D: @用户通知（取 AI 最后一条回复的末尾作为摘要）
-        if (completionNotifyConfig.enableMention && userId && cardMsgId) {
+        if (enableMention && userId && cardMsgId) {
           const maxLen = 200;
           let summary = '';
           try {
@@ -1053,7 +1055,7 @@ async function main() {
         }
 
         // A: 卡片 reaction
-        if (completionNotifyConfig.enableReaction && cardMsgId) {
+        if (enableReaction && cardMsgId) {
           void feishuClient.addReaction(cardMsgId, 'DONE').catch(() => {});
         }
       }

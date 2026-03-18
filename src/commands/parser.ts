@@ -22,7 +22,9 @@ export type CommandType =
   | 'send'         // 发送文件到飞书
   | 'owner'        // 所有者访问控制
   | 'access'       // 访问控制（白名单/黑名单）
-  | 'show';        // 可见性开关（thinking/tool）
+  | 'show'         // 可见性开关（thinking/tool）
+  | 'notify'       // 完成通知方式（会话级）
+  | 'mention';     // 群聊 @ 要求（会话级）
 
 export interface ParsedCommand {
   type: CommandType;
@@ -51,6 +53,8 @@ export interface ParsedCommand {
   accessMode?: 'whitelist' | 'blacklist';
   showTarget?: 'thinking' | 'tool';
   showValue?: boolean | 'reset';
+  notifyMode?: 'mention' | 'reaction' | 'both' | 'none' | 'reset';
+  mentionValue?: boolean | 'reset';
 }
 
 const BANG_SHELL_ALLOWED_COMMANDS = new Set([
@@ -358,6 +362,28 @@ export function parseCommand(text: string): ParsedCommand {
         return { type: 'show' };
       }
 
+      case 'notify': {
+        const sub = args[0]?.toLowerCase();
+        if (!sub) {
+          return { type: 'notify' };
+        }
+        if (sub === 'reset') {
+          return { type: 'notify', notifyMode: 'reset' };
+        }
+        if (sub === 'mention' || sub === 'reaction' || sub === 'both' || sub === 'none') {
+          return { type: 'notify', notifyMode: sub };
+        }
+        return { type: 'notify' };
+      }
+
+      case 'mention': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'on') return { type: 'mention', mentionValue: true };
+        if (sub === 'off') return { type: 'mention', mentionValue: false };
+        if (sub === 'reset') return { type: 'mention', mentionValue: 'reset' };
+        return { type: 'mention' };
+      }
+
       default:
         // 未知命令透传到OpenCode
         return {
@@ -407,6 +433,12 @@ export function getHelpText(): string {
 • \`/show thinking on/off\` 开关思考链（会话级，持久化）
 • \`/show tool on/off\` 开关工具链（会话级，持久化）
 • \`/show reset\` 重置为环境变量默认值
+• \`/notify\` 查看当前完成通知方式
+• \`/notify mention|reaction|both|none\` 设置完成通知（会话级，持久化）
+• \`/notify reset\` 重置为环境变量默认值
+• \`/mention\` 查看当前群聊 @ 要求
+• \`/mention on/off\` 开关群聊 @ 要求（会话级，持久化）
+• \`/mention reset\` 重置为环境变量默认值
 
 🔐 **访问控制（仅 owner 可用）**
 • \`/owner\` 或 \`/owner status\` 查看仅限所有者模式状态

@@ -9,7 +9,7 @@ import {
 } from '../opencode/client.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { buildControlCard, buildStatusCard } from '../feishu/cards.js';
-import { modelConfig, userConfig } from '../config.js';
+import { modelConfig, userConfig, type CompletionNotifyMode } from '../config.js';
 import { sendFileToFeishu } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
 
@@ -800,6 +800,14 @@ export class CommandHandler {
 
         case 'show':
           await this.handleShow(chatId, messageId, command.showTarget, command.showValue);
+          break;
+
+        case 'notify':
+          await this.handleNotify(chatId, messageId, command.notifyMode);
+          break;
+
+        case 'mention':
+          await this.handleMention(chatId, messageId, command.mentionValue);
           break;
 
         case 'compact':
@@ -2047,6 +2055,78 @@ export class CommandHandler {
       '• `/show tool on/off` — 会话级开关工具链',
       '• `/show thinking reset` — 重置为平台/全局默认',
       '• `/show reset` — 重置两项为默认',
+    ];
+    await feishuClient.reply(messageId, lines.join('\n'));
+  }
+
+  private async handleNotify(
+    chatId: string,
+    messageId: string,
+    mode?: 'mention' | 'reaction' | 'both' | 'none' | 'reset'
+  ): Promise<void> {
+    if (mode && mode !== 'reset') {
+      chatSessionStore.updateConfig(chatId, { completionNotifyMode: mode });
+      const modeLabel: Record<CompletionNotifyMode, string> = {
+        mention: '@用户通知',
+        reaction: '表情回复',
+        both: '@用户 + 表情回复',
+        none: '关闭',
+      };
+      await feishuClient.reply(messageId, `✅ 完成通知已设为：${modeLabel[mode]}`);
+      return;
+    }
+
+    if (mode === 'reset') {
+      chatSessionStore.updateConfig(chatId, { completionNotifyMode: null });
+      await feishuClient.reply(messageId, '✅ 完成通知已重置为全局默认');
+      return;
+    }
+
+    const cfg = chatSessionStore.getNotifyConfig(chatId);
+    const modeLabel: Record<CompletionNotifyMode, string> = {
+      mention: '@用户通知',
+      reaction: '表情回复',
+      both: '@用户 + 表情回复',
+      none: '关闭',
+    };
+    const lines = [
+      '📢 **当前完成通知配置**',
+      `• 模式: ${modeLabel[cfg.completionNotifyMode]}`,
+      '',
+      '命令:',
+      '• `/notify mention` — AI 完成时 @用户',
+      '• `/notify reaction` — AI 完成时加表情回复',
+      '• `/notify both` — 两者都发',
+      '• `/notify none` — 关闭通知',
+      '• `/notify reset` — 重置为全局默认',
+    ];
+    await feishuClient.reply(messageId, lines.join('\n'));
+  }
+
+  private async handleMention(
+    chatId: string,
+    messageId: string,
+    value?: boolean | 'reset'
+  ): Promise<void> {
+    if (value !== undefined) {
+      const newValue = value === 'reset' ? null : value;
+      chatSessionStore.updateConfig(chatId, { requireMention: newValue });
+      if (value === 'reset') {
+        await feishuClient.reply(messageId, '✅ @ 要求已重置为全局默认');
+      } else {
+        await feishuClient.reply(messageId, `✅ 群聊 @ 要求已${value ? '开启（需 @机器人）' : '关闭（无需 @机器人）'}`);
+      }
+      return;
+    }
+
+    const cfg = chatSessionStore.getNotifyConfig(chatId);
+    const lines = [
+      `📌 **当前群聊 @ 要求**: ${cfg.requireMention ? '✅ 开启（需 @机器人）' : '❌ 关闭（无需 @机器人）'}`,
+      '',
+      '命令:',
+      '• `/mention on` — 群聊中需要 @机器人 才响应',
+      '• `/mention off` — 群聊中无需 @机器人',
+      '• `/mention reset` — 重置为全局默认',
     ];
     await feishuClient.reply(messageId, lines.join('\n'));
   }

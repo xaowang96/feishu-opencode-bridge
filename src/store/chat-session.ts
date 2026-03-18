@@ -1,11 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { EffortLevel } from '../commands/effort.js';
-import { userConfig, outputConfig } from '../config.js';
+import { userConfig, outputConfig, completionNotifyConfig, type CompletionNotifyMode } from '../config.js';
 
 export interface SessionVisibilityConfig {
   showThinkingChain: boolean;
   showToolChain: boolean;
+}
+
+export interface SessionNotifyConfig {
+  completionNotifyMode: CompletionNotifyMode;
+  requireMention: boolean;
 }
 
 // 群组会话数据结构
@@ -30,6 +35,9 @@ interface ChatSessionData {
   // 会话级可见性开关；undefined 表示跟随平台/全局默认
   showThinkingChain?: boolean;
   showToolChain?: boolean;
+  // 会话级通知/mention 开关；undefined 表示跟随全局默认
+  completionNotifyMode?: CompletionNotifyMode;
+  requireMention?: boolean;
   interactionHistory: InteractionRecord[];
 }
 
@@ -266,6 +274,8 @@ class ChatSessionStore {
     preferredEffort?: EffortLevel;
     showThinkingChain?: boolean | null;
     showToolChain?: boolean | null;
+    completionNotifyMode?: CompletionNotifyMode | null;
+    requireMention?: boolean | null;
   }): void {
     const session = this.data.get(chatId);
     if (session) {
@@ -306,6 +316,22 @@ class ChatSessionStore {
           delete session.showToolChain;
         } else {
           session.showToolChain = config.showToolChain;
+        }
+      }
+
+      if ('completionNotifyMode' in config) {
+        if (config.completionNotifyMode === null || config.completionNotifyMode === undefined) {
+          delete session.completionNotifyMode;
+        } else {
+          session.completionNotifyMode = config.completionNotifyMode;
+        }
+      }
+
+      if ('requireMention' in config) {
+        if (config.requireMention === null || config.requireMention === undefined) {
+          delete session.requireMention;
+        } else {
+          session.requireMention = config.requireMention;
         }
       }
 
@@ -448,6 +474,14 @@ class ChatSessionStore {
     return {
       showThinkingChain: session?.showThinkingChain ?? outputConfig.feishu.showThinkingChain,
       showToolChain: session?.showToolChain ?? outputConfig.feishu.showToolChain,
+    };
+  }
+
+  getNotifyConfig(chatId: string): SessionNotifyConfig {
+    const session = this.data.get(chatId);
+    return {
+      completionNotifyMode: session?.completionNotifyMode ?? completionNotifyConfig.mode,
+      requireMention: session?.requireMention ?? userConfig.requireMention,
     };
   }
 }

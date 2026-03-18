@@ -181,9 +181,10 @@ export class GroupHandler {
       return;
     }
 
-    // 3. @机器人检测：开启 REQUIRE_MENTION 时，普通消息必须 @机器人 才响应
+    // 3. @机器人检测：requireMention 开启时，普通消息必须 @机器人 才响应
     //    例外：小群（≤2人）
-    if (userConfig.requireMention && !this.isBotMentioned(event.mentions)) {
+    const sessionRequireMention = chatSessionStore.getNotifyConfig(chatId).requireMention;
+    if (sessionRequireMention && !this.isBotMentioned(event.mentions)) {
       // 小群无需 @：只有 1 个真人 + 机器人时，直接响应
       const smallGroup = await this.isSmallGroup(chatId);
       if (!smallGroup) {
