@@ -905,11 +905,25 @@ async function main() {
 
     streamContentMap.set(buffer.key, current);
 
+    const sessionVisibility = chatSessionStore.getVisibilityConfig(buffer.chatId);
+    const cardVisibility: VisibilityOptions = {
+      showThinking: sessionVisibility.showThinkingChain,
+      showTools: sessionVisibility.showToolChain,
+    };
+
+    const hasVisibleTools = buffer.tools.length > 0 && cardVisibility.showTools !== false;
+    const hasVisibleThinking = current.thinking.trim().length > 0 && cardVisibility.showThinking !== false;
+    const hasVisibleSegments = timelineSegments.length > 0 && timelineSegments.some(seg => {
+      if (seg.type === 'tool' && cardVisibility.showTools === false) return false;
+      if (seg.type === 'reasoning' && cardVisibility.showThinking === false) return false;
+      return true;
+    });
+
     const hasVisibleContent =
       current.text.trim().length > 0 ||
-      current.thinking.trim().length > 0 ||
-      buffer.tools.length > 0 ||
-      timelineSegments.length > 0 ||
+      hasVisibleThinking ||
+      hasVisibleTools ||
+      hasVisibleSegments ||
       Boolean(pendingPermission) ||
       Boolean(pendingQuestion);
 
@@ -937,12 +951,6 @@ async function main() {
       ...(pendingPermission ? { pendingPermission } : {}),
       ...(pendingQuestion ? { pendingQuestion } : {}),
       status,
-    };
-
-    const sessionVisibility = chatSessionStore.getVisibilityConfig(buffer.chatId);
-    const cardVisibility: VisibilityOptions = {
-      showThinking: sessionVisibility.showThinkingChain,
-      showTools: sessionVisibility.showToolChain,
     };
 
     const cards = buildStreamCards(
