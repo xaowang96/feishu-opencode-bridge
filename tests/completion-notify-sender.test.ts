@@ -11,8 +11,11 @@ vi.mock('../src/config.js', () => ({
     };
   },
   userConfig: {
-    setOwner: vi.fn(),
     requireMention: true,
+  },
+  accessConfig: {
+    defaultMode: 'blacklist',
+    ownerOnlyManage: true,
   },
   completionNotifyConfig: {
     mode: 'both' as const,

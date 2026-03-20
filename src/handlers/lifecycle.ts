@@ -1,7 +1,6 @@
 import { feishuClient } from '../feishu/client.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { opencodeClient } from '../opencode/client.js';
-import { userConfig } from '../config.js';
 
 export interface CleanupStats {
   scannedChats: number;
@@ -62,43 +61,40 @@ export class LifecycleHandler {
     await this.checkAndDisbandIfEmpty(chatId);
   }
 
-  // 检查群是否为空，为空则解散
   private async checkAndDisbandIfEmpty(chatId: string, stats?: CleanupStats): Promise<void> {
     const members = await feishuClient.getChatMembers(chatId);
-
     console.log(`[Lifecycle] 检查群 ${chatId} 成员数: ${members.length}`);
 
-    // 未启用访问控制时：只要群里还有任意成员，就不自动解散
-    // 仅在成员数为 0 时才执行清理，避免误删仅剩 1 名用户的群
-    if (!userConfig.isAccessControlEnabled) {
+    const session = chatSessionStore.getSession(chatId);
+    const ownerId = session?.creatorId;
+    const accessCfg = chatSessionStore.getAccessConfig(chatId);
+    const hasPerChatAccessControl = !!ownerId || accessCfg.allowList.length > 0;
+
+    if (!hasPerChatAccessControl) {
       if (members.length > 0) {
-        console.log(`[Lifecycle] 群 ${chatId} 未启用访问控制且仍有成员，跳过解散`);
+        console.log(`[Lifecycle] 群 ${chatId} 无访问控制且仍有成员，跳过解散`);
         return;
       }
-
-      console.log(`[Lifecycle] 群 ${chatId} 未启用访问控制且成员为 0，准备解散...`);
+      console.log(`[Lifecycle] 群 ${chatId} 无访问控制且成员为 0，准备解散...`);
       await this.cleanupAndDisband(chatId, stats);
       return;
     }
 
-    // 检查是否有 owner 或白名单用户在群内
     const hasAllowedUser = members.some(memberId =>
-      userConfig.isOwner(memberId) || userConfig.dynamicAllowList.has(memberId)
+      memberId === ownerId || accessCfg.allowList.includes(memberId)
     );
-    
+
     if (hasAllowedUser) {
       console.log(`[Lifecycle] 群 ${chatId} 包含 owner 或白名单用户，跳过解散检查`);
       return;
     }
 
-    // 二次确认：检查群主是否为 owner
     const chatInfo = await feishuClient.getChat(chatId);
-    if (chatInfo && userConfig.isOwner(chatInfo.ownerId)) {
+    if (chatInfo && ownerId && chatInfo.ownerId === ownerId) {
       console.log(`[Lifecycle] 群 ${chatId} 群主(${chatInfo.ownerId})为 owner，跳过解散检查`);
       return;
     }
-    
-    // 如果成员数 <= 1，认为群为空（只有机器人或无人）
+
     if (members.length <= 1) {
       console.log(`[Lifecycle] 群 ${chatId} 成员不足且无白名单用户，准备解散...`);
       await this.cleanupAndDisband(chatId, stats);
@@ -106,7 +102,6 @@ export class LifecycleHandler {
   }
 
   private async cleanupAndDisband(chatId: string, stats?: CleanupStats): Promise<void> {
-    // 1. 清理 OpenCode 会话
     const sessionId = chatSessionStore.getSessionId(chatId);
     if (sessionId) {
       const deleteProtected = chatSessionStore.isSessionDeleteProtected(chatId);
@@ -114,7 +109,6 @@ export class LifecycleHandler {
         console.log(`[Lifecycle] 会话删除受保护，跳过删除: ${sessionId}`);
         if (stats) stats.skippedProtectedSessions += 1;
       } else {
-        // 尝试删除会话（如果 API 支持）
         try {
           const deleted = await opencodeClient.deleteSession(sessionId);
           if (deleted && stats) {
@@ -127,7 +121,6 @@ export class LifecycleHandler {
       chatSessionStore.removeSession(chatId);
     }
 
-    // 2. 解散飞书群
     const disbanded = await feishuClient.disbandChat(chatId);
     if (disbanded && stats) {
       stats.disbandedChats += 1;

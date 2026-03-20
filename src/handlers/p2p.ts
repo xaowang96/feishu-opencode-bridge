@@ -345,7 +345,7 @@ export class P2PHandler {
     const trimmedContent = content.trim();
 
     // 0. 检查用户是否可以使用机器人
-    if (!userConfig.canUseBot(senderId)) {
+    if (!chatSessionStore.canUseBot(senderId, chatId)) {
       return;
     }
 
@@ -471,9 +471,6 @@ export class P2PHandler {
     }
 
     console.log(`[P2P] 用户 ${openId} 请求创建新会话群，模式=${bindExistingSession ? '绑定已有会话' : '新建会话'}`);
-
-    // 建群用户自动成为 owner
-    userConfig.setOwner(openId);
 
     // 使用用户指定的群名，或自动生成
     const chatName = customChatName || `会话-${Date.now().toString().slice(-6)}`;

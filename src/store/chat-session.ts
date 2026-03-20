@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { EffortLevel } from '../commands/effort.js';
-import { userConfig, outputConfig, completionNotifyConfig, type CompletionNotifyMode } from '../config.js';
+import { userConfig, outputConfig, completionNotifyConfig, accessConfig, type CompletionNotifyMode, type AccessMode } from '../config.js';
 
 export interface SessionVisibilityConfig {
   showThinkingChain: boolean;
@@ -40,6 +40,9 @@ interface ChatSessionData {
   completionNotifyMode?: CompletionNotifyMode;
   requireMention?: boolean;
   interactionHistory: InteractionRecord[];
+  accessMode?: AccessMode;
+  allowList?: string[];
+  denyList?: string[];
 }
 
 interface SessionAliasRecord {
@@ -82,14 +85,6 @@ class ChatSessionStore {
         const parsed = JSON.parse(content);
         this.data = new Map(Object.entries(parsed));
         console.log(`[Store] 已加载 ${this.data.size} 个群组会话`);
-
-        // 从持久化数据中自动识别 owner（取第一个 creatorId）
-        for (const session of this.data.values()) {
-          if (session.creatorId) {
-            userConfig.setOwner(session.creatorId);
-            break;
-          }
-        }
       }
     } catch (error) {
       console.error('[Store] 加载数据失败:', error);
@@ -490,6 +485,99 @@ class ChatSessionStore {
     return {
       completionNotifyMode: session?.completionNotifyMode ?? completionNotifyConfig.mode,
       requireMention: session?.requireMention ?? userConfig.requireMention,
+    };
+  }
+
+  private resolveAccessMode(session: ChatSessionData | undefined): AccessMode {
+    return session?.accessMode ?? accessConfig.defaultMode;
+  }
+
+  canUseBot(userId: string, chatId: string): boolean {
+    const session = this.data.get(chatId);
+    const mode = this.resolveAccessMode(session);
+
+    if (mode === 'blacklist') {
+      const denyList = session?.denyList ?? [];
+      return !denyList.includes(userId);
+    }
+
+    if (session?.creatorId === userId) return true;
+    const allowList = session?.allowList ?? [];
+    return allowList.includes(userId);
+  }
+
+  accessAllow(chatId: string, userId: string): void {
+    const session = this.data.get(chatId);
+    if (!session) return;
+
+    if (!session.allowList) session.allowList = [];
+    if (!session.allowList.includes(userId)) {
+      session.allowList.push(userId);
+    }
+
+    if (session.denyList) {
+      session.denyList = session.denyList.filter(id => id !== userId);
+      if (session.denyList.length === 0) delete session.denyList;
+    }
+
+    this.save();
+  }
+
+  accessDeny(chatId: string, userId: string): void {
+    const session = this.data.get(chatId);
+    if (!session) return;
+
+    if (!session.denyList) session.denyList = [];
+    if (!session.denyList.includes(userId)) {
+      session.denyList.push(userId);
+    }
+
+    if (session.allowList) {
+      session.allowList = session.allowList.filter(id => id !== userId);
+      if (session.allowList.length === 0) delete session.allowList;
+    }
+
+    this.save();
+  }
+
+  accessRemove(chatId: string, userId: string): boolean {
+    const session = this.data.get(chatId);
+    if (!session) return false;
+
+    let removed = false;
+
+    if (session.allowList) {
+      const before = session.allowList.length;
+      session.allowList = session.allowList.filter(id => id !== userId);
+      if (session.allowList.length < before) removed = true;
+      if (session.allowList.length === 0) delete session.allowList;
+    }
+
+    if (session.denyList) {
+      const before = session.denyList.length;
+      session.denyList = session.denyList.filter(id => id !== userId);
+      if (session.denyList.length < before) removed = true;
+      if (session.denyList.length === 0) delete session.denyList;
+    }
+
+    if (removed) this.save();
+    return removed;
+  }
+
+  setAccessMode(chatId: string, mode: AccessMode): void {
+    const session = this.data.get(chatId);
+    if (!session) return;
+    session.accessMode = mode;
+    this.save();
+  }
+
+  getAccessConfig(chatId: string): { accessMode: AccessMode; allowList: string[]; denyList: string[]; ownerId: string | undefined } {
+    const session = this.data.get(chatId);
+    return {
+      accessMode: this.resolveAccessMode(session),
+      allowList: session?.allowList ?? [],
+      denyList: session?.denyList ?? [],
+      ownerId: session?.creatorId,
     };
   }
 }

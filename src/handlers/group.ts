@@ -7,7 +7,7 @@ import { parseQuestionAnswerText } from '../opencode/question-parser.js';
 import { parseCommand, isMultiLineCommands, splitMultiLineCommands } from '../commands/parser.js';
 import type { EffortLevel } from '../commands/effort.js';
 import { commandHandler } from './command.js';
-import { modelConfig, attachmentConfig, userConfig } from '../config.js';
+import { modelConfig, attachmentConfig } from '../config.js';
 
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -156,7 +156,7 @@ export class GroupHandler {
     const trimmed = content.trim();
 
     // 0. 检查用户是否可以使用机器人
-    if (!userConfig.canUseBot(senderId)) {
+    if (!chatSessionStore.canUseBot(senderId, chatId)) {
       return;
     }
 
