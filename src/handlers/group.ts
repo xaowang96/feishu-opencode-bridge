@@ -155,6 +155,11 @@ export class GroupHandler {
     const { chatId, content, messageId, senderId, attachments } = event;
     const trimmed = content.trim();
 
+    // 0. 检查用户是否可以使用机器人
+    if (!userConfig.canUseBot(senderId)) {
+      return;
+    }
+
     // 1. 有待回答的问题时，优先处理问题回答
     //    防止 y/n/yes/no 等回答被 parseCommand 误识别为权限响应命令
     const hasPendingQuestion = questionHandler.getByConversationKey(`chat:${chatId}`);
@@ -176,9 +181,10 @@ export class GroupHandler {
       return;
     }
 
-    // 3. @机器人检测：开启 REQUIRE_MENTION 时，普通消息必须 @机器人 才响应
+    // 3. @机器人检测：requireMention 开启时，普通消息必须 @机器人 才响应
     //    例外：小群（≤2人）
-    if (userConfig.requireMention && !this.isBotMentioned(event.mentions)) {
+    const sessionRequireMention = chatSessionStore.getNotifyConfig(chatId).requireMention;
+    if (sessionRequireMention && !this.isBotMentioned(event.mentions)) {
       // 小群无需 @：只有 1 个真人 + 机器人时，直接响应
       const smallGroup = await this.isSmallGroup(chatId);
       if (!smallGroup) {
@@ -216,6 +222,7 @@ export class GroupHandler {
     // 5. 处理 Prompt
     // 记录用户消息ID
     chatSessionStore.updateLastInteraction(chatId, messageId);
+    chatSessionStore.updateLastSender(chatId, senderId);
     
     // 获取当前会话配置
     const sessionConfig = chatSessionStore.getSession(chatId);

@@ -19,29 +19,42 @@ export type CommandType =
   | 'status'       // 查看状态
   | 'command'      // 透传命令
   | 'permission'   // 权限响应
-  | 'send';        // 发送文件到飞书
+  | 'send'         // 发送文件到飞书
+  | 'owner'        // 所有者访问控制
+  | 'access'       // 访问控制（白名单/黑名单）
+  | 'show'         // 可见性开关（thinking/tool）
+  | 'notify'       // 完成通知方式（会话级）
+  | 'mention';     // 群聊 @ 要求（会话级）
 
 export interface ParsedCommand {
   type: CommandType;
-  text?: string;           // prompt类型的文本内容
-  modelName?: string;      // model类型的模型名称
-  agentName?: string;      // agent类型的名称
+  text?: string;
+  modelName?: string;
+  agentName?: string;
   roleAction?: 'create';
   roleSpec?: string;
   sessionAction?: 'new' | 'switch' | 'list';
-  sessionId?: string;      // session switch的目标ID
-  sessionDirectory?: string; // session new 指定的工作区目录
-  clearScope?: 'all' | 'free_session'; // 清理范围
+  sessionId?: string;
+  sessionDirectory?: string;
+  clearScope?: 'all' | 'free_session';
   clearSessionId?: string;
   permissionResponse?: 'y' | 'n' | 'yes' | 'no';
-  commandName?: string;    // 透传命令名称
-  commandArgs?: string;    // 透传命令参数
-  commandPrefix?: '/' | '!'; // 透传命令前缀
+  commandName?: string;
+  commandArgs?: string;
+  commandPrefix?: '/' | '!';
   effortLevel?: EffortLevel;
   effortRaw?: string;
   effortReset?: boolean;
   promptEffort?: EffortLevel;
   adminAction?: 'add';
+  ownerAction?: 'on' | 'off' | 'status';
+  accessAction?: 'allow' | 'deny' | 'remove' | 'list' | 'mode' | 'status';
+  accessTarget?: string;
+  accessMode?: 'whitelist' | 'blacklist';
+  showTarget?: 'thinking' | 'tool';
+  showValue?: boolean | 'reset';
+  notifyMode?: 'mention' | 'reaction' | 'both' | 'none' | 'reset';
+  mentionValue?: boolean | 'reset';
 }
 
 const BANG_SHELL_ALLOWED_COMMANDS = new Set([
@@ -296,6 +309,81 @@ export function parseCommand(text: string): ParsedCommand {
       case 'sendfile':
         return { type: 'send', text: args.join(' ') };
 
+      case 'owner': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'on') return { type: 'owner', ownerAction: 'on' };
+        if (sub === 'off') return { type: 'owner', ownerAction: 'off' };
+        return { type: 'owner', ownerAction: 'status' };
+      }
+
+      case 'access': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'allow' && args[1]) {
+          return { type: 'access', accessAction: 'allow', accessTarget: args[1] };
+        }
+        if (sub === 'deny' && args[1]) {
+          return { type: 'access', accessAction: 'deny', accessTarget: args[1] };
+        }
+        if (sub === 'remove' && args[1]) {
+          return { type: 'access', accessAction: 'remove', accessTarget: args[1] };
+        }
+        if (sub === 'list') {
+          return { type: 'access', accessAction: 'list' };
+        }
+        if (sub === 'mode' && args[1]) {
+          const mode = args[1].toLowerCase();
+          if (mode === 'whitelist' || mode === 'blacklist') {
+            return { type: 'access', accessAction: 'mode', accessMode: mode };
+          }
+        }
+        return { type: 'access', accessAction: 'status' };
+      }
+
+      case 'show': {
+        const sub = args[0]?.toLowerCase();
+        const val = args[1]?.toLowerCase();
+
+        if (!sub) {
+          return { type: 'show' };
+        }
+
+        if (sub === 'thinking' || sub === 'tool') {
+          const target = sub as 'thinking' | 'tool';
+          if (val === 'on') return { type: 'show', showTarget: target, showValue: true };
+          if (val === 'off') return { type: 'show', showTarget: target, showValue: false };
+          if (val === 'reset') return { type: 'show', showTarget: target, showValue: 'reset' };
+          return { type: 'show', showTarget: target };
+        }
+
+        if (sub === 'reset') {
+          return { type: 'show', showValue: 'reset' };
+        }
+
+        return { type: 'show' };
+      }
+
+      case 'notify': {
+        const sub = args[0]?.toLowerCase();
+        if (!sub) {
+          return { type: 'notify' };
+        }
+        if (sub === 'reset') {
+          return { type: 'notify', notifyMode: 'reset' };
+        }
+        if (sub === 'mention' || sub === 'reaction' || sub === 'both' || sub === 'none') {
+          return { type: 'notify', notifyMode: sub };
+        }
+        return { type: 'notify' };
+      }
+
+      case 'mention': {
+        const sub = args[0]?.toLowerCase();
+        if (sub === 'on') return { type: 'mention', mentionValue: true };
+        if (sub === 'off') return { type: 'mention', mentionValue: false };
+        if (sub === 'reset') return { type: 'mention', mentionValue: 'reset' };
+        return { type: 'mention' };
+      }
+
       default:
         // 未知命令透传到OpenCode
         return {
@@ -341,6 +429,27 @@ export function getHelpText(): string {
 • \`/undo\` 撤回上一轮对话 (如果你发错或 AI 答错)
 • \`/stop\` 停止当前正在生成的回答
 • \`/compact\` 压缩当前会话上下文（调用 OpenCode summarize）
+• \`/show\` 查看当前会话思考链/工具链显示状态
+• \`/show thinking on/off\` 开关思考链（会话级，持久化）
+• \`/show tool on/off\` 开关工具链（会话级，持久化）
+• \`/show reset\` 重置为环境变量默认值
+• \`/notify\` 查看当前完成通知方式
+• \`/notify mention|reaction|both|none\` 设置完成通知（会话级，持久化）
+• \`/notify reset\` 重置为环境变量默认值
+• \`/mention\` 查看当前群聊 @ 要求
+• \`/mention on/off\` 开关群聊 @ 要求（会话级，持久化）
+• \`/mention reset\` 重置为环境变量默认值
+
+🔐 **访问控制（仅 owner 可用）**
+• \`/owner\` 或 \`/owner status\` 查看仅限所有者模式状态
+• \`/owner on\` 开启仅限所有者模式（只有所有者可使用机器人）
+• \`/owner off\` 关闭仅限所有者模式（恢复白名单规则）
+• \`/access allow <open_id>\` 将用户加入白名单
+• \`/access deny <open_id>\` 将用户加入黑名单
+• \`/access remove <open_id>\` 从白名单/黑名单移除用户
+• \`/access list\` 查看当前白名单/黑名单
+• \`/access mode whitelist|blacklist\` 切换访问控制模式
+• 注：owner 为首次建群的用户，自动识别
 
 ⚙️ **会话管理**
 • \`/create_chat\` 或 \`/建群\` 打开建群卡片（下拉按 工作区/Session短ID/简介 展示，支持跨工作区）
@@ -362,5 +471,5 @@ export function getHelpText(): string {
 • 如果遇到问题，试着使用 \`/panel\` 面板操作更方便。
 
  📤 **文件发送**
- • \`/send <绝对路径>\` 发送文件到群聊 (e.g. \`/send /tmp/report.pdf\` 或 \`/send C:\\Users\\你\\Desktop\\图片.jpg\`)`;
+ • \`/send <路径>\` 发送文件到群聊（支持绝对路径和相对路径，相对路径基于会话工作区）`;
 }

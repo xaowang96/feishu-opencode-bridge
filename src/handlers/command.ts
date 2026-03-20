@@ -9,7 +9,7 @@ import {
 } from '../opencode/client.js';
 import { chatSessionStore } from '../store/chat-session.js';
 import { buildControlCard, buildStatusCard } from '../feishu/cards.js';
-import { modelConfig, userConfig } from '../config.js';
+import { modelConfig, userConfig, type CompletionNotifyMode } from '../config.js';
 import { sendFileToFeishu } from './file-sender.js';
 import { lifecycleHandler } from './lifecycle.js';
 
@@ -768,14 +768,46 @@ export class CommandHandler {
           }
           break;
 
-        case 'stop':
+        case 'stop': {
           const sessionId = chatSessionStore.getSessionId(chatId);
           if (sessionId) {
-            await opencodeClient.abortSession(sessionId, chatSessionStore.getSession(chatId)?.sessionDirectory);
+            const directory = chatSessionStore.getSession(chatId)?.sessionDirectory;
+            console.log(`[Stop] 中断会话: sessionId=${sessionId}, directory=${directory}`);
+            const aborted = await opencodeClient.abortSession(sessionId, directory);
+            console.log(`[Stop] abort 结果: ${aborted}`);
+
+            const children = await opencodeClient.getSessionChildren(sessionId).catch(() => []);
+            console.log(`[Stop] 子会话数量: ${children.length}`);
+            for (const child of children) {
+              console.log(`[Stop] 尝试中断子会话: ${child.id}`);
+              await opencodeClient.abortSession(child.id, directory).catch(() => {});
+            }
+
             await feishuClient.reply(messageId, '⏹️ 已发送中断请求');
           } else {
             await feishuClient.reply(messageId, '当前没有活跃的会话');
           }
+          break;
+        }
+
+        case 'owner':
+          await this.handleOwnerCommand(chatId, messageId, context.senderId, command.ownerAction);
+          break;
+
+        case 'access':
+          await this.handleAccessCommand(chatId, messageId, context.senderId, command);
+          break;
+
+        case 'show':
+          await this.handleShow(chatId, messageId, command.showTarget, command.showValue);
+          break;
+
+        case 'notify':
+          await this.handleNotify(chatId, messageId, command.notifyMode);
+          break;
+
+        case 'mention':
+          await this.handleMention(chatId, messageId, command.mentionValue);
           break;
 
         case 'compact':
@@ -1820,11 +1852,12 @@ export class CommandHandler {
   private async handleSendFile(chatId: string, messageId: string, filePath: string): Promise<void> {
     const trimmed = filePath.trim();
     if (!trimmed) {
-      await feishuClient.reply(messageId, '请提供文件的绝对路径，例如:\n• /send /path/to/file.png\n• /send C:\\Users\\你\\Desktop\\图片.jpg');
+      await feishuClient.reply(messageId, '请提供文件路径，例如:\n• /send /path/to/file.png\n• /send ./relative/path.pdf');
       return;
     }
 
-    const result = await sendFileToFeishu({ filePath: trimmed, chatId });
+    const baseDirectory = chatSessionStore.getSession(chatId)?.sessionDirectory;
+    const result = await sendFileToFeishu({ filePath: trimmed, chatId, baseDirectory });
     if (result.success) {
       await feishuClient.reply(messageId, `✅ 已发送${result.sendType === 'image' ? '图片' : '文件'}: ${result.fileName}`);
     } else {
@@ -1832,7 +1865,272 @@ export class CommandHandler {
     }
   }
 
-  // 公开以供外部调用（如消息撤回事件）
+  private async handleOwnerCommand(chatId: string, messageId: string, senderId: string, action?: 'on' | 'off' | 'status'): Promise<void> {
+    // 检查是否有配置所有者
+    if (!userConfig.ownerId) {
+      await feishuClient.reply(messageId, '❌ 尚未识别所有者，请先通过私聊建群以自动确定所有者');
+      return;
+    }
+
+    // 检查发送者是否为所有者
+    if (!userConfig.isOwner(senderId)) {
+      await feishuClient.reply(messageId, '❌ 只有所有者可以使用此命令');
+      return;
+    }
+
+    switch (action) {
+      case 'on':
+        userConfig.setOwnerOnlyMode(true);
+        await feishuClient.reply(messageId, '✅ 已开启仅限所有者模式\n现在只有所有者可以使用机器人');
+        break;
+
+      case 'off':
+        userConfig.setOwnerOnlyMode(false);
+        await feishuClient.reply(messageId, '✅ 已关闭仅限所有者模式\n现在按白名单规则允许用户使用机器人');
+        break;
+
+      case 'status':
+      default:
+        const currentStatus = userConfig.ownerOnlyMode ? '开启' : '关闭';
+        const ownerInfo = userConfig.ownerId;
+        const statusText = [
+          `📋 仅限所有者模式状态: ${currentStatus}`,
+          `👤 当前所有者: ${ownerInfo}`,
+          '',
+          '💡 使用说明:',
+          '• /owner on - 开启仅限所有者模式', 
+          '• /owner off - 关闭仅限所有者模式',
+          '• /owner status - 查看当前状态',
+        ].join('\n');
+        await feishuClient.reply(messageId, statusText);
+        break;
+    }
+  }
+
+  private async handleAccessCommand(
+    chatId: string,
+    messageId: string,
+    senderId: string,
+    command: { accessAction?: string; accessTarget?: string; accessMode?: 'whitelist' | 'blacklist' }
+  ): Promise<void> {
+    if (!userConfig.isOwner(senderId)) {
+      await feishuClient.reply(messageId, '❌ 只有所有者可以使用访问控制命令');
+      return;
+    }
+
+    const { accessAction, accessTarget, accessMode } = command;
+
+    switch (accessAction) {
+      case 'allow': {
+        if (!accessTarget) {
+          await feishuClient.reply(messageId, '用法: /access allow <open_id>');
+          return;
+        }
+        userConfig.dynamicAllowList.add(accessTarget);
+        userConfig.blacklist.delete(accessTarget);
+        await feishuClient.reply(messageId, `✅ 已将 ${accessTarget} 加入白名单`);
+        break;
+      }
+
+      case 'deny': {
+        if (!accessTarget) {
+          await feishuClient.reply(messageId, '用法: /access deny <open_id>');
+          return;
+        }
+        userConfig.blacklist.add(accessTarget);
+        userConfig.dynamicAllowList.delete(accessTarget);
+        await feishuClient.reply(messageId, `✅ 已将 ${accessTarget} 加入黑名单`);
+        break;
+      }
+
+      case 'remove': {
+        if (!accessTarget) {
+          await feishuClient.reply(messageId, '用法: /access remove <open_id>');
+          return;
+        }
+        const inAllow = userConfig.dynamicAllowList.delete(accessTarget);
+        const inDeny = userConfig.blacklist.delete(accessTarget);
+        if (inAllow || inDeny) {
+          await feishuClient.reply(messageId, `✅ 已将 ${accessTarget} 从访问控制列表移除`);
+        } else {
+          await feishuClient.reply(messageId, `⚠️ ${accessTarget} 不在任何列表中`);
+        }
+        break;
+      }
+
+      case 'mode': {
+        if (!accessMode) {
+          await feishuClient.reply(messageId, '用法: /access mode whitelist|blacklist');
+          return;
+        }
+        userConfig.accessMode = accessMode;
+        const modeLabel = accessMode === 'whitelist' ? '白名单' : '黑名单';
+        await feishuClient.reply(messageId, `✅ 访问控制模式已切换为: ${modeLabel}`);
+        break;
+      }
+
+      case 'list': {
+        const lines: string[] = [
+          `📋 访问控制状态`,
+          `所有者: ${userConfig.ownerId || '(未识别)'}`,
+          `模式: ${userConfig.accessMode === 'whitelist' ? '白名单' : '黑名单'}`,
+          `仅限所有者模式: ${userConfig.ownerOnlyMode ? '开启' : '关闭'}`,
+          '',
+        ];
+        if (userConfig.dynamicAllowList.size > 0) {
+          lines.push(`白名单:\n${[...userConfig.dynamicAllowList].map((u: string) => `  • ${u}`).join('\n')}`);
+        } else {
+          lines.push('白名单: (空)');
+        }
+        if (userConfig.blacklist.size > 0) {
+          lines.push(`黑名单:\n${[...userConfig.blacklist].map((u: string) => `  • ${u}`).join('\n')}`);
+        } else {
+          lines.push('黑名单: (空)');
+        }
+        await feishuClient.reply(messageId, lines.join('\n'));
+        break;
+      }
+
+      default: {
+        const lines = [
+          `📋 访问控制状态`,
+          `模式: ${userConfig.accessMode === 'whitelist' ? '白名单' : '黑名单'}`,
+          `仅限所有者模式: ${userConfig.ownerOnlyMode ? '开启' : '关闭'}`,
+          '',
+          '命令:',
+          '• /access allow <open_id> — 加入白名单',
+          '• /access deny <open_id>  — 加入黑名单',
+          '• /access remove <open_id> — 从列表移除',
+          '• /access list — 查看所有列表',
+          '• /access mode whitelist|blacklist — 切换模式',
+        ];
+        await feishuClient.reply(messageId, lines.join('\n'));
+        break;
+      }
+    }
+  }
+
+  private async handleShow(
+    chatId: string,
+    messageId: string,
+    target?: 'thinking' | 'tool',
+    value?: boolean | 'reset'
+  ): Promise<void> {
+    if (target && value !== undefined) {
+      const newValue = value === 'reset' ? null : value;
+      chatSessionStore.updateConfig(chatId, {
+        ...(target === 'thinking' ? { showThinkingChain: newValue } : {}),
+        ...(target === 'tool' ? { showToolChain: newValue } : {}),
+      });
+
+      if (value === 'reset') {
+        await feishuClient.reply(messageId, `✅ ${target === 'thinking' ? '思考链' : '工具链'} 显示已重置为默认`);
+      } else {
+        await feishuClient.reply(messageId, `✅ ${target === 'thinking' ? '思考链' : '工具链'} 显示已${value ? '开启' : '关闭'}`);
+      }
+      return;
+    }
+
+    if (!target && value === 'reset') {
+      chatSessionStore.updateConfig(chatId, { showThinkingChain: null, showToolChain: null });
+      await feishuClient.reply(messageId, '✅ 思考链与工具链显示已重置为平台/全局默认');
+      return;
+    }
+
+    if (target) {
+      const vis = chatSessionStore.getVisibilityConfig(chatId);
+      const current = target === 'thinking' ? vis.showThinkingChain : vis.showToolChain;
+      await feishuClient.reply(messageId, `${target === 'thinking' ? '思考链' : '工具链'} 当前状态: ${current ? '开启' : '关闭'}`);
+      return;
+    }
+
+    const vis = chatSessionStore.getVisibilityConfig(chatId);
+    const lines = [
+      '📊 **当前可见性配置**',
+      `• 思考链 (thinking): ${vis.showThinkingChain ? '✅ 开启' : '❌ 关闭'}`,
+      `• 工具链 (tool): ${vis.showToolChain ? '✅ 开启' : '❌ 关闭'}`,
+      '',
+      '命令:',
+      '• `/show thinking on/off` — 会话级开关思考链',
+      '• `/show tool on/off` — 会话级开关工具链',
+      '• `/show thinking reset` — 重置为平台/全局默认',
+      '• `/show reset` — 重置两项为默认',
+    ];
+    await feishuClient.reply(messageId, lines.join('\n'));
+  }
+
+  private async handleNotify(
+    chatId: string,
+    messageId: string,
+    mode?: 'mention' | 'reaction' | 'both' | 'none' | 'reset'
+  ): Promise<void> {
+    if (mode && mode !== 'reset') {
+      chatSessionStore.updateConfig(chatId, { completionNotifyMode: mode });
+      const modeLabel: Record<CompletionNotifyMode, string> = {
+        mention: '@用户通知',
+        reaction: '表情回复',
+        both: '@用户 + 表情回复',
+        none: '关闭',
+      };
+      await feishuClient.reply(messageId, `✅ 完成通知已设为：${modeLabel[mode]}`);
+      return;
+    }
+
+    if (mode === 'reset') {
+      chatSessionStore.updateConfig(chatId, { completionNotifyMode: null });
+      await feishuClient.reply(messageId, '✅ 完成通知已重置为全局默认');
+      return;
+    }
+
+    const cfg = chatSessionStore.getNotifyConfig(chatId);
+    const modeLabel: Record<CompletionNotifyMode, string> = {
+      mention: '@用户通知',
+      reaction: '表情回复',
+      both: '@用户 + 表情回复',
+      none: '关闭',
+    };
+    const lines = [
+      '📢 **当前完成通知配置**',
+      `• 模式: ${modeLabel[cfg.completionNotifyMode]}`,
+      '',
+      '命令:',
+      '• `/notify mention` — AI 完成时 @用户',
+      '• `/notify reaction` — AI 完成时加表情回复',
+      '• `/notify both` — 两者都发',
+      '• `/notify none` — 关闭通知',
+      '• `/notify reset` — 重置为全局默认',
+    ];
+    await feishuClient.reply(messageId, lines.join('\n'));
+  }
+
+  private async handleMention(
+    chatId: string,
+    messageId: string,
+    value?: boolean | 'reset'
+  ): Promise<void> {
+    if (value !== undefined) {
+      const newValue = value === 'reset' ? null : value;
+      chatSessionStore.updateConfig(chatId, { requireMention: newValue });
+      if (value === 'reset') {
+        await feishuClient.reply(messageId, '✅ @ 要求已重置为全局默认');
+      } else {
+        await feishuClient.reply(messageId, `✅ 群聊 @ 要求已${value ? '开启（需 @机器人）' : '关闭（无需 @机器人）'}`);
+      }
+      return;
+    }
+
+    const cfg = chatSessionStore.getNotifyConfig(chatId);
+    const lines = [
+      `📌 **当前群聊 @ 要求**: ${cfg.requireMention ? '✅ 开启（需 @机器人）' : '❌ 关闭（无需 @机器人）'}`,
+      '',
+      '命令:',
+      '• `/mention on` — 群聊中需要 @机器人 才响应',
+      '• `/mention off` — 群聊中无需 @机器人',
+      '• `/mention reset` — 重置为全局默认',
+    ];
+    await feishuClient.reply(messageId, lines.join('\n'));
+  }
+
   public async handleUndo(chatId: string, triggerMessageId?: string): Promise<void> {
     // 0. 删除触发 undo 的命令消息（如果存在）
     if (triggerMessageId) {

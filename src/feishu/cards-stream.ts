@@ -1,5 +1,8 @@
 export * from './cards.js';
 
+import { outputConfig } from '../config.js';
+
+
 export type StreamToolState = {
   name: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
@@ -91,6 +94,36 @@ function truncateMiddleText(text: string, limit: number): string {
   return `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`;
 }
 
+function splitTextIntoChunks(text: string, chunkSize: number): string[] {
+  if (text.length <= chunkSize) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > chunkSize) {
+    let splitAt = chunkSize;
+    const paragraphBreak = remaining.lastIndexOf('\n\n', chunkSize);
+    const lineBreak = remaining.lastIndexOf('\n', chunkSize);
+
+    if (paragraphBreak > chunkSize * 0.5) {
+      splitAt = paragraphBreak + 2;
+    } else if (lineBreak > chunkSize * 0.5) {
+      splitAt = lineBreak + 1;
+    }
+
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
+}
+
 function getToolStatusLabel(status: StreamToolState['status']): { icon: string; text: string } {
   if (status === 'running') {
     return { icon: '⏳', text: '执行中' };
@@ -114,13 +147,19 @@ export interface StreamCardBuildOptions {
   componentBudget?: number;
 }
 
-const DEFAULT_STREAM_CARD_COMPONENT_BUDGET = 180;
+export interface VisibilityOptions {
+  showThinking?: boolean;
+  showTools?: boolean;
+}
+
+
+const DEFAULT_STREAM_CARD_COMPONENT_BUDGET = 150;
 const MIN_STREAM_CARD_COMPONENT_BUDGET = 20;
 const MAX_TIMELINE_SEGMENTS = 60;
-const MAX_REASONING_SEGMENT_LENGTH = 2600;
-const MAX_TOOL_OUTPUT_LENGTH = 4000;
+const MAX_REASONING_SEGMENT_LENGTH = 4000;
+const MAX_TOOL_OUTPUT_LENGTH = 1500;
 const MAX_TEXT_SEGMENT_LENGTH = 5000;
-const MAX_THINKING_PANEL_LENGTH = 2600;
+const MAX_THINKING_PANEL_LENGTH = 4000;
 const MAX_BODY_TEXT_LENGTH = 6000;
 
 function isHrElement(element: object): boolean {
@@ -172,28 +211,46 @@ function normalizeElementPage(elements: object[]): object[] {
   return normalized;
 }
 
+const MAX_PAGE_JSON_BYTES = 20000;
+
+function estimateJsonSize(element: object): number {
+  try {
+    return JSON.stringify(element).length;
+  } catch {
+    return 500;
+  }
+}
+
 function paginateElementsByComponentBudget(elements: object[], componentBudget: number): object[][] {
   const safeBudget = Math.max(componentBudget, MIN_STREAM_CARD_COMPONENT_BUDGET);
-  // 预留 1 个组件给 header.title（plain_text）
   const budgetForBody = Math.max(1, safeBudget - 1);
   const pages: object[][] = [];
   let currentPage: object[] = [];
   let currentCount = 0;
+  let currentBytes = 0;
 
   for (const element of elements) {
     const componentCount = Math.max(1, countComponentTags(element));
+    const elementBytes = estimateJsonSize(element);
 
-    if (currentPage.length > 0 && currentCount + componentCount > budgetForBody) {
+    const exceedsBudget = currentPage.length > 0 && (
+      currentCount + componentCount > budgetForBody ||
+      currentBytes + elementBytes > MAX_PAGE_JSON_BYTES
+    );
+
+    if (exceedsBudget) {
       const normalized = normalizeElementPage(currentPage);
       if (normalized.length > 0) {
         pages.push(normalized);
       }
       currentPage = [];
       currentCount = 0;
+      currentBytes = 0;
     }
 
     currentPage.push(element);
     currentCount += componentCount;
+    currentBytes += elementBytes;
   }
 
   const normalized = normalizeElementPage(currentPage);
@@ -208,7 +265,7 @@ function paginateElementsByComponentBudget(elements: object[], componentBudget: 
   return pages;
 }
 
-function buildTimelineElements(segments: StreamCardSegment[]): object[] {
+function buildTimelineElements(segments: StreamCardSegment[], visibility?: VisibilityOptions): object[] {
   const elements: object[] = [];
   const visibleSegments = segments.slice(-MAX_TIMELINE_SEGMENTS);
 
@@ -216,6 +273,9 @@ function buildTimelineElements(segments: StreamCardSegment[]): object[] {
     let nextElement: object | null = null;
 
     if (segment.type === 'reasoning') {
+      if (visibility?.showThinking === false) {
+        continue;
+      }
       const text = segment.text.trim();
       if (!text) {
         continue;
@@ -239,6 +299,9 @@ function buildTimelineElements(segments: StreamCardSegment[]): object[] {
         ],
       };
     } else if (segment.type === 'tool') {
+      if (visibility?.showTools === false) {
+        continue;
+      }
       const statusInfo = getToolStatusLabel(segment.status);
       const toolKindLabel = segment.kind === 'subtask' ? '子任务' : '工具';
       const output = segment.output?.trim() ? truncateMiddleText(segment.output.trim(), MAX_TOOL_OUTPUT_LENGTH) : '';
@@ -276,11 +339,17 @@ function buildTimelineElements(segments: StreamCardSegment[]): object[] {
       if (!segment.text.trim()) {
         continue;
       }
-      const text = truncateMiddleText(segment.text, MAX_TEXT_SEGMENT_LENGTH);
-      nextElement = {
-        tag: 'markdown',
-        content: text,
-      };
+      const chunks = splitTextIntoChunks(segment.text, MAX_TEXT_SEGMENT_LENGTH);
+      for (let i = 0; i < chunks.length; i++) {
+        if (elements.length > 0 && i === 0) {
+          elements.push({ tag: 'hr' });
+        }
+        elements.push({ tag: 'markdown', content: chunks[i] });
+        if (i < chunks.length - 1) {
+          elements.push({ tag: 'hr' });
+        }
+      }
+      continue;
     } else if (segment.type === 'note') {
       const text = segment.text.trim();
       if (!text) {
@@ -393,12 +462,12 @@ function buildPendingQuestionElements(question: StreamCardPendingQuestion): obje
   return blocks;
 }
 
-function buildStreamCardElements(data: StreamCardData): object[] {
+function buildStreamCardElements(data: StreamCardData, visibility?: VisibilityOptions): object[] {
   const elements: object[] = [];
   const thinkingText = data.thinking.trim();
 
   const timelineElements = Array.isArray(data.segments) && data.segments.length > 0
-    ? buildTimelineElements(data.segments)
+    ? buildTimelineElements(data.segments, visibility)
     : [];
 
   if (timelineElements.length > 0) {
@@ -406,8 +475,7 @@ function buildStreamCardElements(data: StreamCardData): object[] {
   }
 
   if (timelineElements.length === 0) {
-    // 1. 思考过程（原生折叠面板）
-    if (thinkingText) {
+    if (thinkingText && visibility?.showThinking !== false) {
       const renderedThinking = truncateMiddleText(thinkingText, MAX_THINKING_PANEL_LENGTH);
       elements.push({
         tag: 'collapsible_panel',
@@ -427,8 +495,7 @@ function buildStreamCardElements(data: StreamCardData): object[] {
       });
     }
 
-    // 2. 工具调用列表
-    if (data.tools.length > 0) {
+    if (data.tools.length > 0 && visibility?.showTools !== false) {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });
       }
@@ -451,13 +518,13 @@ function buildStreamCardElements(data: StreamCardData): object[] {
 
     // 3. 正文
     if (data.text) {
-      if (elements.length > 0) {
-        elements.push({ tag: 'hr' });
+      const chunks = splitTextIntoChunks(data.text, MAX_BODY_TEXT_LENGTH);
+      for (const chunk of chunks) {
+        if (elements.length > 0) {
+          elements.push({ tag: 'hr' });
+        }
+        elements.push({ tag: 'markdown', content: chunk });
       }
-      elements.push({
-        tag: 'markdown',
-        content: truncateMiddleText(data.text, MAX_BODY_TEXT_LENGTH),
-      });
     } else if (data.status === 'processing') {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });
@@ -527,8 +594,16 @@ function buildStreamCardPayload(
   };
 }
 
-export function buildStreamCards(data: StreamCardData, options?: StreamCardBuildOptions): object[] {
-  const allElements = buildStreamCardElements(data);
+export function buildStreamCards(
+  data: StreamCardData,
+  options?: StreamCardBuildOptions,
+  visibility?: VisibilityOptions
+): object[] {
+  const resolvedVisibility: VisibilityOptions = {
+    showThinking: visibility?.showThinking ?? outputConfig.feishu.showThinkingChain,
+    showTools: visibility?.showTools ?? outputConfig.feishu.showToolChain,
+  };
+  const allElements = buildStreamCardElements(data, resolvedVisibility);
   const statusColor: 'blue' | 'green' | 'red' = data.status === 'processing'
     ? 'blue'
     : data.status === 'completed'
@@ -551,6 +626,6 @@ export function buildStreamCards(data: StreamCardData, options?: StreamCardBuild
   });
 }
 
-export function buildStreamCard(data: StreamCardData): object {
-  return buildStreamCards(data)[0];
+export function buildStreamCard(data: StreamCardData, visibility?: VisibilityOptions): object {
+  return buildStreamCards(data, undefined, visibility)[0];
 }

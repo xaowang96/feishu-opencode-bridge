@@ -1,6 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { EffortLevel } from '../commands/effort.js';
+import { userConfig, outputConfig, completionNotifyConfig, type CompletionNotifyMode } from '../config.js';
+
+export interface SessionVisibilityConfig {
+  showThinkingChain: boolean;
+  showToolChain: boolean;
+}
+
+export interface SessionNotifyConfig {
+  completionNotifyMode: CompletionNotifyMode;
+  requireMention: boolean;
+}
 
 // 群组会话数据结构
 export type ChatSessionType = 'p2p' | 'group';
@@ -10,6 +21,7 @@ interface ChatSessionData {
   sessionId: string;
   sessionDirectory?: string;
   creatorId: string; // 创建者ID
+  lastSenderId?: string; // 最后发消息的用户ID（用于完成通知 @正确的人）
   createdAt: number;
   title?: string;
   chatType?: ChatSessionType;
@@ -21,6 +33,12 @@ interface ChatSessionData {
   preferredModel?: string; // e.g., "openai:gpt-4"
   preferredAgent?: string;
   preferredEffort?: EffortLevel;
+  // 会话级可见性开关；undefined 表示跟随平台/全局默认
+  showThinkingChain?: boolean;
+  showToolChain?: boolean;
+  // 会话级通知/mention 开关；undefined 表示跟随全局默认
+  completionNotifyMode?: CompletionNotifyMode;
+  requireMention?: boolean;
   interactionHistory: InteractionRecord[];
 }
 
@@ -62,9 +80,16 @@ class ChatSessionStore {
       if (fs.existsSync(STORE_FILE)) {
         const content = fs.readFileSync(STORE_FILE, 'utf-8');
         const parsed = JSON.parse(content);
-        // 转换 object 到 Map
         this.data = new Map(Object.entries(parsed));
         console.log(`[Store] 已加载 ${this.data.size} 个群组会话`);
+
+        // 从持久化数据中自动识别 owner（取第一个 creatorId）
+        for (const session of this.data.values()) {
+          if (session.creatorId) {
+            userConfig.setOwner(session.creatorId);
+            break;
+          }
+        }
       }
     } catch (error) {
       console.error('[Store] 加载数据失败:', error);
@@ -243,8 +268,23 @@ class ChatSessionStore {
     return session.title.startsWith('飞书群聊') || session.title.startsWith('群聊');
   }
 
-  // 更新会话配置 (模型/角色/强度)
-  updateConfig(chatId: string, config: { preferredModel?: string; preferredAgent?: string; preferredEffort?: EffortLevel }): void {
+  updateLastSender(chatId: string, senderId: string): void {
+    const session = this.data.get(chatId);
+    if (session && senderId) {
+      session.lastSenderId = senderId;
+      this.save();
+    }
+  }
+
+  updateConfig(chatId: string, config: {
+    preferredModel?: string;
+    preferredAgent?: string;
+    preferredEffort?: EffortLevel;
+    showThinkingChain?: boolean | null;
+    showToolChain?: boolean | null;
+    completionNotifyMode?: CompletionNotifyMode | null;
+    requireMention?: boolean | null;
+  }): void {
     const session = this.data.get(chatId);
     if (session) {
       if ('preferredModel' in config) {
@@ -270,6 +310,39 @@ class ChatSessionStore {
           delete session.preferredEffort;
         }
       }
+
+      if ('showThinkingChain' in config) {
+        if (config.showThinkingChain === null || config.showThinkingChain === undefined) {
+          delete session.showThinkingChain;
+        } else {
+          session.showThinkingChain = config.showThinkingChain;
+        }
+      }
+
+      if ('showToolChain' in config) {
+        if (config.showToolChain === null || config.showToolChain === undefined) {
+          delete session.showToolChain;
+        } else {
+          session.showToolChain = config.showToolChain;
+        }
+      }
+
+      if ('completionNotifyMode' in config) {
+        if (config.completionNotifyMode === null || config.completionNotifyMode === undefined) {
+          delete session.completionNotifyMode;
+        } else {
+          session.completionNotifyMode = config.completionNotifyMode;
+        }
+      }
+
+      if ('requireMention' in config) {
+        if (config.requireMention === null || config.requireMention === undefined) {
+          delete session.requireMention;
+        } else {
+          session.requireMention = config.requireMention;
+        }
+      }
+
       this.save();
     }
   }
@@ -402,6 +475,22 @@ class ChatSessionStore {
   // 获取所有群聊ID（用于启动清理）
   getAllChatIds(): string[] {
     return Array.from(this.data.keys());
+  }
+
+  getVisibilityConfig(chatId: string): SessionVisibilityConfig {
+    const session = this.data.get(chatId);
+    return {
+      showThinkingChain: session?.showThinkingChain ?? outputConfig.feishu.showThinkingChain,
+      showToolChain: session?.showToolChain ?? outputConfig.feishu.showToolChain,
+    };
+  }
+
+  getNotifyConfig(chatId: string): SessionNotifyConfig {
+    const session = this.data.get(chatId);
+    return {
+      completionNotifyMode: session?.completionNotifyMode ?? completionNotifyConfig.mode,
+      requireMention: session?.requireMention ?? userConfig.requireMention,
+    };
   }
 }
 

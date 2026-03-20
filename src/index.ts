@@ -17,6 +17,7 @@ import {
   type StreamCardSegment,
   type StreamCardPendingPermission,
   type StreamCardPendingQuestion,
+  type VisibilityOptions,
 } from './feishu/cards-stream.js';
 
 async function main() {
@@ -47,7 +48,7 @@ async function main() {
   const errorNoticeMap = new Map<string, string>();
   const streamCardMessageIdsMap = new Map<string, string[]>();
   const completionNotifiedSet = new Set<string>(); // 防止完成通知重复发送
-  const STREAM_CARD_COMPONENT_BUDGET = 180;
+  const STREAM_CARD_COMPONENT_BUDGET = 150;
   const CORRELATION_CACHE_TTL_MS = 10 * 60 * 1000;
 
   type CorrelationChatRef = {
@@ -882,7 +883,12 @@ async function main() {
       !pendingPermission &&
       !pendingQuestion &&
       buffer.status === 'running'
-    ) return;
+    ) {
+      console.log(`[Card][DIAG] 跳过更新 (无新内容): key=${buffer.key}, status=${buffer.status}`);
+      return;
+    }
+
+    console.log(`[Card][DIAG] 开始更新: key=${buffer.key}, status=${buffer.status}, textLen=${text.length}, tools=${buffer.tools.length}, segments=${timelineSegments.length}`);
 
     const current = streamContentMap.get(buffer.key) || { text: '', thinking: '' };
     current.text += text;
@@ -899,11 +905,25 @@ async function main() {
 
     streamContentMap.set(buffer.key, current);
 
+    const sessionVisibility = chatSessionStore.getVisibilityConfig(buffer.chatId);
+    const cardVisibility: VisibilityOptions = {
+      showThinking: sessionVisibility.showThinkingChain,
+      showTools: sessionVisibility.showToolChain,
+    };
+
+    const hasVisibleTools = buffer.tools.length > 0 && cardVisibility.showTools !== false;
+    const hasVisibleThinking = current.thinking.trim().length > 0 && cardVisibility.showThinking !== false;
+    const hasVisibleSegments = timelineSegments.length > 0 && timelineSegments.some(seg => {
+      if (seg.type === 'tool' && cardVisibility.showTools === false) return false;
+      if (seg.type === 'reasoning' && cardVisibility.showThinking === false) return false;
+      return true;
+    });
+
     const hasVisibleContent =
       current.text.trim().length > 0 ||
-      current.thinking.trim().length > 0 ||
-      buffer.tools.length > 0 ||
-      timelineSegments.length > 0 ||
+      hasVisibleThinking ||
+      hasVisibleTools ||
+      hasVisibleSegments ||
       Boolean(pendingPermission) ||
       Boolean(pendingQuestion);
 
@@ -931,7 +951,6 @@ async function main() {
       ...(pendingPermission ? { pendingPermission } : {}),
       ...(pendingQuestion ? { pendingQuestion } : {}),
       status,
-      showThinking: false,
     };
 
     const cards = buildStreamCards(
@@ -941,7 +960,8 @@ async function main() {
       },
       {
         componentBudget: STREAM_CARD_COMPONENT_BUDGET,
-      }
+      },
+      cardVisibility
     );
 
     const nextMessageIds: string[] = [];
@@ -956,11 +976,13 @@ async function main() {
           continue;
         }
 
+        console.warn(`[Card][DIAG] updateCard 失败，尝试 sendCard 替代: key=${buffer.key}, msgId=${existingMessageId.slice(0, 16)}`);
         const replacementMessageId = await feishuClient.sendCard(buffer.chatId, card);
         if (replacementMessageId) {
           void feishuClient.deleteMessage(existingMessageId).catch(() => undefined);
           nextMessageIds.push(replacementMessageId);
         } else {
+          console.error(`[Card][DIAG] sendCard 替代也失败: key=${buffer.key}`);
           nextMessageIds.push(existingMessageId);
         }
         continue;
@@ -1005,10 +1027,12 @@ async function main() {
         completionNotifiedSet.add(buffer.key);
         const cardMsgId = nextMessageIds[nextMessageIds.length - 1];
         const sessionData = chatSessionStore.getSession(buffer.chatId);
-        const userId = sessionData?.creatorId;
+        const userId = sessionData?.lastSenderId || sessionData?.creatorId;
+        const notifyCfg = chatSessionStore.getNotifyConfig(buffer.chatId);
+        const enableMention = notifyCfg.completionNotifyMode === 'mention' || notifyCfg.completionNotifyMode === 'both';
+        const enableReaction = notifyCfg.completionNotifyMode === 'reaction' || notifyCfg.completionNotifyMode === 'both';
 
-        // D: @用户通知（取 AI 最后一条回复的末尾作为摘要）
-        if (completionNotifyConfig.enableMention && userId && cardMsgId) {
+        if (enableMention && userId && cardMsgId) {
           const maxLen = 200;
           let summary = '';
           try {
@@ -1039,7 +1063,7 @@ async function main() {
         }
 
         // A: 卡片 reaction
-        if (completionNotifyConfig.enableReaction && cardMsgId) {
+        if (enableReaction && cardMsgId) {
           void feishuClient.addReaction(cardMsgId, 'DONE').catch(() => {});
         }
       }
@@ -1448,7 +1472,12 @@ async function main() {
       if (!sessionID) return;
 
       const chatId = chatSessionStore.getChatId(sessionID);
-      if (!chatId) return;
+      if (!chatId) {
+        console.log(`[SSE][DIAG] messagePartUpdated 无法匹配 chatId: sessionID=${sessionID}, partType=${part?.type}`);
+        return;
+      }
+
+      console.log(`[SSE][DIAG] 收到事件: partType=${part?.type || 'delta'}, session=${sessionID.slice(0, 8)}, chat=${chatId.slice(0, 12)}, deltaLen=${typeof delta === 'string' ? delta.length : 0}`);
 
       const bufferKey = `chat:${chatId}`;
       if (!outputBuffer.get(bufferKey)) {
