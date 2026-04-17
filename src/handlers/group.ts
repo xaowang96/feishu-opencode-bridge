@@ -4,7 +4,7 @@ import { chatSessionStore } from '../store/chat-session.js';
 import { outputBuffer } from '../opencode/output-buffer.js';
 import { questionHandler, type PendingQuestion } from '../opencode/question-handler.js';
 import { parseQuestionAnswerText } from '../opencode/question-parser.js';
-import { parseCommand } from '../commands/parser.js';
+import { parseCommand, isMultiLineCommands, splitMultiLineCommands } from '../commands/parser.js';
 import type { EffortLevel } from '../commands/effort.js';
 import { commandHandler } from './command.js';
 import { modelConfig, attachmentConfig, userConfig } from '../config.js';
@@ -168,7 +168,31 @@ export class GroupHandler {
       if (hasPending) return;
     }
 
-    // 2. 处理命令
+    // 2. 多行命令批量执行：飞书粘贴多行命令时（如多个 /clear free session ...），逐行分发
+    if (isMultiLineCommands(trimmed)) {
+      const lines = splitMultiLineCommands(trimmed);
+      console.log(`[Group] 检测到多行命令（${lines.length} 条），逐行执行`);
+      const results: string[] = [];
+      for (const line of lines) {
+        const lineCommand = parseCommand(line);
+        try {
+          await commandHandler.handle(lineCommand, {
+            chatId,
+            messageId,
+            senderId,
+            chatType: 'group'
+          });
+          results.push(`✅ ${line}`);
+        } catch (error) {
+          console.error(`[Group] 多行命令执行失败: ${line}`, error);
+          results.push(`❌ ${line}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      await feishuClient.reply(messageId, `📋 批量执行完成（${lines.length} 条命令）\n${results.join('\n')}`);
+      return;
+    }
+
+    // 3. 处理单行命令
     const command = parseCommand(trimmed);
     if (command.type !== 'prompt') {
       console.log(`[Group] 收到命令: ${command.type}`);

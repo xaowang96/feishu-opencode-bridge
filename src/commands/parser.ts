@@ -404,6 +404,29 @@ export function parseCommand(text: string): ParsedCommand {
   };
 }
 
+/**
+ * 检测文本是否包含多行命令（每行都是独立的 / 或 ! 命令）。
+ * 当飞书用户粘贴多行命令时（如多个 /clear free session ...），需要拆分逐条执行。
+ */
+export function isMultiLineCommands(text: string): boolean {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+
+  // 每一行都必须是命令（/ 或 ! 开头），才视为多行命令批量
+  return lines.every(line => {
+    const parsed = parseCommand(line);
+    return parsed.type !== 'prompt';
+  });
+}
+
+/**
+ * 将多行命令文本拆分为独立的命令行数组。
+ * 过滤空行，保留每行原始内容（已 trim）。
+ */
+export function splitMultiLineCommands(text: string): string[] {
+  return text.split('\n').map(line => line.trim()).filter(Boolean);
+}
+
 // 生成帮助文本
 export function getHelpText(): string {
   return `📖 **飞书 × OpenCode 机器人指南**

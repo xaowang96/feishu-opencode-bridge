@@ -8,7 +8,7 @@ import {
   type CreateChatCardData,
   type CreateChatSessionOption,
 } from '../feishu/cards.js';
-import { parseCommand, getHelpText, type ParsedCommand } from '../commands/parser.js';
+import { parseCommand, getHelpText, type ParsedCommand, isMultiLineCommands, splitMultiLineCommands } from '../commands/parser.js';
 import { commandHandler } from './command.js';
 import { groupHandler } from './group.js';
 import { userConfig } from '../config.js';
@@ -372,7 +372,31 @@ export class P2PHandler {
       return;
     }
 
-    // 3. 私聊命令
+    // 3.2 多行命令批量执行
+    if (isMultiLineCommands(trimmedContent)) {
+      const lines = splitMultiLineCommands(trimmedContent);
+      console.log(`[P2P] 检测到多行命令（${lines.length} 条），逐行执行`);
+      const results: string[] = [];
+      for (const line of lines) {
+        const lineCommand = parseCommand(line);
+        try {
+          await commandHandler.handle(lineCommand, {
+            chatId,
+            messageId,
+            senderId,
+            chatType: 'p2p'
+          });
+          results.push(`✅ ${line}`);
+        } catch (error) {
+          console.error(`[P2P] 多行命令执行失败: ${line}`, error);
+          results.push(`❌ ${line}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      await this.safeReply(messageId, chatId, `📋 批量执行完成（${lines.length} 条命令）\n${results.join('\n')}`);
+      return;
+    }
+
+    // 3.3 私聊单行命令
     if (command.type !== 'prompt') {
       console.log(`[P2P] 收到命令: ${command.type}`);
       await commandHandler.handle(command, {
