@@ -1340,7 +1340,15 @@ export class CommandHandler {
   }
 
   private getVisibleAgents(agents: OpencodeAgentInfo[]): OpencodeAgentInfo[] {
-    return agents.filter(agent => agent.hidden !== true && !INTERNAL_HIDDEN_AGENT_NAMES.has(agent.name));
+    // Only show primary-mode agents in the panel. Subagents are meant to be
+    // invoked internally by an orchestrator, not selected by end-users — and
+    // listing all of them overflows Feishu's select dropdown (≈40 options max),
+    // which silently drops the tail (this is how `miwear-wf` went missing).
+    return agents.filter(agent =>
+      agent.hidden !== true
+      && !INTERNAL_HIDDEN_AGENT_NAMES.has(agent.name)
+      && agent.mode === 'primary',
+    );
   }
 
   private getAgentModePrefix(agent: OpencodeAgentInfo): string {
