@@ -964,6 +964,13 @@ async function main() {
       cardVisibility
     );
 
+    const sendFirstCard = async (card: object): Promise<string | null> => {
+      if (buffer.replyMessageId) {
+        return feishuClient.replyCard(buffer.replyMessageId, card);
+      }
+      return feishuClient.sendCard(buffer.chatId, card);
+    };
+
     const nextMessageIds: string[] = [];
     for (let index = 0; index < cards.length; index++) {
       const card = cards[index];
@@ -1020,7 +1027,9 @@ async function main() {
 
         // 分页重试失败，回退到删除重建逻辑
         console.warn(`[Card] 分页重试失败，回退到删除重建: key=${buffer.key}`);
-        const replacementMessageId = await feishuClient.sendCard(buffer.chatId, card);
+        const replacementMessageId = index === 0
+          ? await sendFirstCard(card)
+          : await feishuClient.sendCard(buffer.chatId, card);
         if (replacementMessageId) {
           void feishuClient.deleteMessage(existingMessageId).catch(() => undefined);
           nextMessageIds.push(replacementMessageId);
@@ -1031,7 +1040,9 @@ async function main() {
         continue;
       }
 
-      const newMessageId = await feishuClient.sendCard(buffer.chatId, card);
+      const newMessageId = index === 0
+        ? await sendFirstCard(card)
+        : await feishuClient.sendCard(buffer.chatId, card);
       if (newMessageId) {
         nextMessageIds.push(newMessageId);
       }
