@@ -377,9 +377,31 @@ class FeishuClient extends EventEmitter {
 
     // 监听消息撤回事件
     // 本地不再重复注册撤回事件，避免与 onMessageRecalled 冲突
+    const wsLogger = {
+      error: (...args: unknown[]) => {
+        console.error('[ws-sdk]', ...args);
+      },
+      warn: (...args: unknown[]) => {
+        console.warn('[ws-sdk]', ...args);
+      },
+      info: (...args: unknown[]) => {
+        console.log('[ws-sdk]', ...args);
+        const text = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+        if (text.includes('unable to connect to the server after trying')) {
+          console.error('[飞书] WS 彻底放弃重连，进程退出由 watchdog 拉起');
+          setTimeout(() => process.exit(1), 100);
+        }
+      },
+      debug: (...args: unknown[]) => {
+        console.debug('[ws-sdk]', ...args);
+      },
+      trace: () => { /* 抑制 trace */ },
+    };
+
     this.wsClient = new lark.WSClient({
       appId: feishuConfig.appId,
       appSecret: feishuConfig.appSecret,
+      logger: wsLogger,
     });
 
     // 启动连接

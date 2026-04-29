@@ -14,6 +14,7 @@ const pidFile = path.join(logsDir, 'bridge.pid');
 const outLog = path.join(logsDir, 'service.log');
 const errLog = path.join(logsDir, 'service.err');
 const entryFile = path.join(rootDir, 'dist', 'index.js');
+const supervisorFile = path.join(scriptDir, 'supervisor.mjs');
 
 function isWindows() {
   return process.platform === 'win32';
@@ -118,7 +119,7 @@ function startBridge() {
   const stdoutFd = fs.openSync(outLog, 'a');
   const stderrFd = fs.openSync(errLog, 'a');
 
-  const child = spawn(process.execPath, ['dist/index.js'], {
+  const child = spawn(process.execPath, [supervisorFile], {
     cwd: rootDir,
     detached: true,
     stdio: ['ignore', stdoutFd, stderrFd],
@@ -130,7 +131,7 @@ function startBridge() {
   fs.closeSync(stderrFd);
 
   fs.writeFileSync(pidFile, String(child.pid), 'utf-8');
-  console.log(`[start] 启动成功，PID=${child.pid}`);
+  console.log(`[start] 启动成功，supervisor PID=${child.pid}`);
   console.log(`[start] 日志文件: ${outLog}`);
 }
 
